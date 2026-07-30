@@ -48,7 +48,11 @@ def _get_reader():
             _ensure_ca_bundle()
             import easyocr  # torch 로딩이 무거우므로 지연 임포트
             logger.info("[ocr] EasyOCR Reader 로딩 중(최초 1회, ~10초)...")
-            _reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
+            # 양자화 인식 모델은 AVX2(fbgemm) 필수 — 미지원 CPU에서는 invalid opcode로
+            # 프로세스가 즉사하며 SIGILL이라 예외로 잡을 수도 없다. 기본은 비양자화로 두고
+            # SITECHECK_OCR_QUANTIZE=1 로 명시한 경우에만 켠다(약간 빠른 대신 AVX2 필요).
+            quantize = os.environ.get("SITECHECK_OCR_QUANTIZE") == "1"
+            _reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False, quantize=quantize)
             logger.info("[ocr] EasyOCR Reader 준비 완료")
         except Exception as e:
             _disabled = True
