@@ -1,0 +1,19 @@
+[Unit]
+Description=사이트 점검 자동 수집 스케줄 (매주 화/금 13:00, Docker)
+
+[Timer]
+# 매주 화요일, 금요일 오후 1시 (서버 로컬 시간 기준)
+# ※ 서버 시간대가 Asia/Seoul 인지 반드시 확인하세요:
+#     timedatectl                       # 현재 시간대 확인
+#     sudo timedatectl set-timezone Asia/Seoul
+OnCalendar=Tue,Fri *-*-* 13:00:00
+
+# 서버가 꺼져 있어 시각을 놓쳤으면 부팅 후 곧바로 1회 실행
+Persistent=true
+
+RandomizedDelaySec=30
+
+Unit=sitecheck-collect.service
+
+[Install]
+WantedBy=timers.target

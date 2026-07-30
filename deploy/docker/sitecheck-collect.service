@@ -1,0 +1,23 @@
+[Unit]
+Description=사이트 점검 자동 수집 (1회 실행, Docker)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+
+# ── 환경에 맞게 수정 ──────────────────────────────────────────
+WorkingDirectory=/opt/siteCheck
+ExecStart=/usr/bin/docker compose run --rm collect
+# compose 플러그인이 없고 standalone docker-compose만 있다면:
+# ExecStart=/usr/local/bin/docker-compose run --rm collect
+# ─────────────────────────────────────────────────────────────
+
+StandardOutput=journal
+StandardError=journal
+
+# 수집이 멈춰도 무한 대기하지 않도록 (최대 15분)
+TimeoutStartSec=900
+
+# 타이머로 구동되므로 [Install] 불필요 (timer 가 호출)

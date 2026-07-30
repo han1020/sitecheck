@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    image: sitecheck:latest
+    container_name: sitecheck-web
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config      # review_skips.yaml 등을 웹에서 쓰므로 rw 마운트
+      - ./output:/app/output
+      - ./logs:/app/logs
+    shm_size: "1g"                # Chromium 공유메모리 부족 방지
+    restart: unless-stopped
+
+  # 수집 1회 실행용. 상주하지 않으며 `docker compose run --rm collect`로 호출
+  collect:
+    image: sitecheck:latest
+    profiles: ["tools"]
+    volumes:
+      - ./config:/app/config
+      - ./output:/app/output
+      - ./logs:/app/logs
+    shm_size: "1g"
+    command: python collect.py
