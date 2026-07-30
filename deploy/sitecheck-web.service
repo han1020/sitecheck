@@ -1,0 +1,35 @@
+[Unit]
+Description=사이트 점검 수집 웹 대시보드
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ── 아래 4개를 서버 환경에 맞게 수정하세요 ──────────────────────────
+# 실행 계정 (root 비권장)
+User=sitecheck
+Group=sitecheck
+# 프로젝트 경로 (git clone 한 위치)
+WorkingDirectory=/opt/siteCheck
+# venv 안의 python 으로 serve.py 실행 (호스트/포트 조정 가능)
+ExecStart=/opt/siteCheck/.venv/bin/python serve.py --host 0.0.0.0 --port 8000
+# ─────────────────────────────────────────────────────────────
+
+# Playwright 브라우저 설치 위치를 프로젝트 안에 고정 (install 시 동일 변수로 받아야 함)
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/siteCheck/.playwright
+
+# 죽으면 5초 후 자동 재시작
+Restart=always
+RestartSec=5
+
+# 로그는 journald 로 (journalctl -u sitecheck-web 로 확인)
+StandardOutput=journal
+StandardError=journal
+
+# 가벼운 보안 강화 (필요 시 조정)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+playwright>=1.45.0
+openpyxl>=3.1.2
+PyYAML>=6.0.1
+APScheduler>=3.10.4
+python-dateutil>=2.9.0
+requests>=2.32.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.0
+pycryptodome>=3.20.0
+easyocr>=1.7.0        # 이미지 공지 OCR(선택). 미설치 시 해당 공지는 '검토 필요'로 남음

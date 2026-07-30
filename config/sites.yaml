@@ -1,0 +1,508 @@
+# 점검 공지 수집 대상 사이트 목록
+#
+# 각 사이트는 다음 필드를 가집니다:
+#   code:                    내부 식별자 (스크린샷 폴더명에도 사용) - 참조 엑셀의 ModuleCode 동일
+#   name:                    사이트명 (엑셀 표시) - 참조 엑셀의 ModuleName
+#   category:                분류 (은행/저축은행/카드/증권/공공/etc)
+#   enabled:                 true 면 스크래핑 수행. false 면 메타만 보유 (정기점검은 출력)
+#   list_url:                공지사항 목록 페이지 URL
+#   list_item_selector:      목록의 각 행을 가리키는 CSS 셀렉터
+#   title_selector:          행 안에서 제목 텍스트를 잡는 셀렉터 (a 태그 권장)
+#   date_selector:           행 안에서 작성일을 잡는 셀렉터 (있을 경우)
+#   detail_url_attr:         'href' 또는 'click' (JS로 열리는 경우)
+#   detail_content_selector: 상세 페이지 본문 영역 (점검 일시 파싱용)
+#   wait_selector:           목록 페이지가 로드 완료됐다고 판단할 셀렉터
+#   max_items:               목록에서 검사할 최대 행 수 (기본 20)
+#
+# 신규 사이트를 활성화하려면 enabled: true 로 바꾸고 셀렉터를 채우면 됩니다.
+
+sites:
+  # ===================== 시중은행 =====================
+  - code: KRBK0002
+    name: 산업은행
+    category: 은행
+    enabled: true
+    list_url: https://www.kdb.co.kr/BOUBUF01R01.jct
+
+  - code: KRBK0003
+    name: 기업은행
+    category: 은행
+    enabled: true
+    list_url: https://kiup.ibk.co.kr/uib/jsp/popup/PNOTICE.jsp?list_yn=N&ebnk_dscd=E
+
+  - code: KRBK0004
+    name: 국민은행
+    category: 은행
+    enabled: true
+    list_url: https://obiz.kbstar.com/quics?page=C025030
+    list_item_selector: "table tbody tr"
+    title_selector: "td.title a, td a"
+    date_selector: "td.date, td:nth-child(4)"
+    detail_url_attr: href
+    detail_content_selector: "div.notice_view, div.viewArea"
+    wait_selector: "table"
+    max_items: 15
+
+  - code: KRBK0007
+    name: 수협은행
+    category: 은행
+    enabled: true
+    list_url: https://biz.suhyup-bank.com/ib20/mnu/CBM00334
+
+  - code: KRBK0011
+    name: 농협은행
+    category: 은행
+    enabled: true
+    list_url: https://mbiz.nonghyup.com/servlet/ICECP0500R.view?saac=saac
+    list_item_selector: "table tbody tr"
+    title_selector: "a"
+    date_selector: ""
+    detail_url_attr: click
+    detail_content_selector: "body"
+    wait_selector: "table"
+    max_items: 15
+
+  - code: KRBK0020
+    name: 우리은행
+    category: 은행
+    enabled: true
+    list_url: https://spot.wooribank.com/pot/Dream?withyou=BPPBC0009
+    list_item_selector: "table tbody tr"
+    title_selector: "td.title a, td a"
+    date_selector: "td.date, td:last-child"
+    detail_url_attr: href
+    detail_content_selector: "div.notice_view, div.boardView"
+    wait_selector: "table"
+    max_items: 15
+
+  - code: KRBK0023
+    name: SC은행
+    category: 은행
+    enabled: true
+    list_url: https://www.standardchartered.co.kr/np/kr/cm/cm/IndexNoticeBoard2.jsp?DtlId=2
+
+  - code: KRBK0027
+    name: 씨티은행
+    category: 은행
+    enabled: true
+    list_url: https://koreacitidirect.citigroup.com/FWK999905g.jct
+
+  - code: KRBK0031
+    name: 대구은행
+    category: 은행
+    enabled: true
+    list_url: https://www.dgb.co.kr/bbs_ebz_10010_bord.act
+
+  - code: KRBK0032
+    name: 부산은행
+    category: 은행
+    enabled: true
+    list_url: https://www.busanbank.co.kr/ib20/mnu/BHPBKI392002003
+
+  - code: KRBK0034
+    name: 광주은행
+    category: 은행
+    enabled: true
+    list_url: https://www.kjbank.com/ib20/mnu/BHPBKIF050101
+
+  - code: KRBK0035
+    name: 제주은행
+    category: 은행
+    # 외부 암호화 서비스(enctool.goweve.io, eversafe)에 본문 암호화 위임
+    enabled: true
+    list_url: https://bank.jejubank.co.kr:6443/inbank/pr/cc/selListCmkn.do
+
+  - code: KRBK0037
+    name: 전북은행
+    category: 은행
+    enabled: true
+    list_url: https://www.jbbank.co.kr/search/commonnews.act
+
+  - code: KRBK0039
+    name: 경남은행
+    category: 은행
+    enabled: true
+    list_url: https://www.knbank.co.kr/ib20/mnu/BHPBKI020100000
+
+  - code: KRBK0045
+    name: 새마을금고
+    category: 은행
+    enabled: true
+    list_url: https://biz.kfcc.co.kr/ib20/mnu/CIB000000000130
+
+  - code: KRBK0048
+    name: 신협은행
+    category: 은행
+    # 공지 본문이 이미지(jpg/png)뿐 → 점검 일시 텍스트 파싱 불가
+    enabled: true
+    list_url: https://bizbank.cu.co.kr/corpIBPT/EI_CSC010201_01_ACT01.jct
+
+  - code: KRBK0071
+    name: 우체국
+    category: 은행
+    enabled: true
+    list_url: https://www.epostbank.go.kr/CCBTNS0000.do
+
+  - code: KRBK0081
+    name: KEB하나은행
+    category: 은행
+    enabled: true
+    list_url: https://biz.kebhana.com/conts/index.do?goUrl=/cont/customer/customer07/index.jsp&Ctype=B&cid=view_main&oid=020
+    list_item_selector: "table tbody tr"
+    title_selector: "a"
+    date_selector: ""
+    detail_url_attr: click
+    detail_content_selector: "body"
+    wait_selector: "table"
+    max_items: 15
+
+  - code: KRBK0088
+    name: 신한은행
+    category: 은행
+    enabled: true
+    list_url: https://bizbank.shinhan.com/
+
+  - code: KRBK0089
+    name: K뱅크
+    category: 은행
+    enabled: true
+    list_url: https://biz.kbanknow.com/ib20/mnu/CBKCSC020100
+
+  # ===================== 저축은행 =====================
+  - code: KRBK0101
+    name: 저축은행중앙회
+    category: 저축은행
+    # 통합: 중앙회/더케이/키움YES/JT친애 4곳 집계 → 하위 기관명을 별칭으로 인정
+    enabled: true
+    aliases: [중앙회, 더케이, 키움, JT친애]
+    list_url: https://www.fsb.or.kr/nesfnewnoti_0100.act
+
+  - code: KRBK0102
+    name: 대신저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://bank.daishin.com/sub.do?code=03_news02
+
+  - code: KRBK0103
+    name: SBI저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.sbisb.co.kr/cum0020300.jct
+
+  - code: KRBK0104
+    name: 애큐온저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.acuonsb.co.kr/sv_hki0040110.act
+
+  - code: KRBK0105
+    name: 웰컴저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.welcomebank.co.kr/ib20/mnu/IBNBKINTC000
+
+  - code: KRBK0106
+    name: KB저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.kbsavings.com/websquare/websquare.jsp?w2xPath=/jsp/companyMng/prCenter/noticeList.xml
+
+  - code: KRBK0107
+    name: 푸른저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.prsb.co.kr/
+
+  - code: KRBK0108
+    name: 하나저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.hanasavings.com/CUS/CUS0101
+
+  - code: KRBK0109
+    name: DB저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.idbsb.com/
+
+  - code: KRBK0110
+    name: NH저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.nhsavingsbank.co.kr/notice/list.do
+
+  - code: KRBK0111
+    name: OSB저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.osb.co.kr/ib20/mnu/HOM00034
+
+  - code: KRBK0112
+    name: BNK저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.bnksb.com/sub.do?code=03_news02
+
+  - code: KRBK0113
+    name: 신한저축은행
+    category: 저축은행
+    enabled: true
+    list_url: https://www.shinhansavings.com/
+
+  # ===================== 공공 / 기타 =====================
+  - code: KRCK0002
+    name: 인터넷 등기소
+    category: 공공
+    enabled: true
+    # WebSquare SPA — 게시판 JSON API 직접 호출 (커스텀 핸들러 handlers/PP/KRCK0002.py)
+    list_url: https://www.iros.go.kr/index.jsp?w2xPath=/ui/pm10/p0/regtinfo/Pm10P0NoticList.xml
+    aliases:
+      - 인터넷등기소
+    max_items: 10
+
+  - code: KRMW
+    name: 정부24
+    category: 공공
+    enabled: false
+    list_url: https://www.gov.kr/
+
+  - code: KRNT
+    name: 국세청
+    category: 공공
+    enabled: true
+    # 홈택스 메인 배너 + 공지사항 (커스텀 핸들러 handlers/PP/KRNT.py — Playwright 필수)
+    list_url: https://hometax.go.kr/websquare/websquare.html?w2xPath=/ui/pp/index_pp.xml&menuCd=index3
+    aliases:
+      - 홈택스
+    max_items: 10
+
+  - code: KRPP0002
+    name: 건강보험
+    category: 공공
+    enabled: false
+    list_url: https://www.nhis.or.kr/
+
+  # ===================== 증권 =====================
+  - code: KRST0209
+    name: 유안타증권
+    category: 증권
+    enabled: true
+    list_url: https://www.myasset.com/
+
+  - code: KRST0218
+    name: KB증권
+    category: 증권
+    enabled: true
+    list_url: https://www.kbsec.com/go.able?linkcd=CJTRAJAX2
+
+  - code: KRST0225
+    name: IBK투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.ibks.com/
+
+  - code: KRST0227
+    name: 다올투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.daolsec.com/
+
+  - code: KRST0238
+    name: 미래에셋증권
+    category: 증권
+    enabled: true
+    list_url: https://securities.miraeasset.com/bbs/board/message/list.do?categoryId=66&selectedId=1000000202&selectedId=1000000203&selectedId=1000003101
+
+  - code: KRST0240
+    name: 삼성증권
+    category: 증권
+    enabled: true
+    list_url: https://www.samsungpop.com/ux/kor/customer/notice/notice/noticeList.do
+
+  - code: KRST0243
+    name: 한국투자증권
+    category: 증권
+    enabled: true
+    list_url: https://securities.koreainvestment.com/main/customer/notice/Notice.jsp
+
+  - code: KRST0247
+    name: NH투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.nhqv.com/
+
+  - code: KRST1247
+    name: 모바일증권 나무
+    category: 증권
+    enabled: true
+    list_url: https://m.nhqv.com/
+
+  - code: KRST0261
+    name: 교보증권
+    category: 증권
+    enabled: true
+    list_url: https://www.iprovest.com/
+
+  - code: KRST0262
+    name: iM증권
+    category: 증권
+    enabled: true
+    aliases: [하이투자증권, 하이투자, 아이엠증권]
+    list_url: https://www.imfnsec.com/
+
+  - code: KRST0264
+    name: 키움증권
+    category: 증권
+    enabled: true
+    list_url: https://bbn.kiwoom.com/bbs/SBbsNoticeNWWNZListAjax
+
+  - code: KRST0265
+    name: 이베스트투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.ebestsec.co.kr/
+
+  - code: KRST0266
+    name: SK증권
+    category: 증권
+    enabled: true
+    list_url: https://www.sks.co.kr/
+
+  - code: KRST0267
+    name: 대신증권
+    category: 증권
+    enabled: true
+    list_url: https://www.daishin.com/
+
+  - code: KRST0269
+    name: 한화투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.hanwhawm.com/
+
+  - code: KRST0270
+    name: 하나증권
+    category: 증권
+    enabled: true
+    list_url: https://www.hanaw.com/
+
+  - code: KRST0278
+    name: 신한투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.shinhansec.com/
+
+  - code: KRST0279
+    name: DB금융투자
+    category: 증권
+    enabled: true
+    list_url: https://www.db-fi.com/
+
+  - code: KRST0280
+    name: 유진투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.eugenefn.com/
+
+  - code: KRST0287
+    name: 메리츠증권
+    category: 증권
+    enabled: true
+    list_url: https://www.imeritz.com/
+
+  - code: KRST0294
+    name: 우리투자증권
+    category: 증권
+    enabled: true
+    list_url: https://www.wooriib.com/
+
+  # ===================== 카드 =====================
+  - code: KRCD0301
+    name: KB카드
+    category: 카드
+    enabled: false
+    list_url: https://card.kbcard.com/
+
+  - code: KRCD0302
+    name: 현대카드
+    category: 카드
+    enabled: false
+    list_url: https://www.hyundaicard.com/
+
+  - code: KRCD0303
+    name: 삼성카드
+    category: 카드
+    enabled: false
+    list_url: https://www.samsungcard.com/
+
+  - code: KRCD0304
+    name: NH카드
+    category: 카드
+    enabled: false
+    list_url: https://card.nonghyup.com/
+
+  - code: KRCD0305
+    name: 비씨카드
+    category: 카드
+    # 2026-04 리뉴얼로 corp.bccard.com(/app/wisebiz) 이전. 목록은 POST AJAX
+    # (JSON body → resData.list), 상세는 GET NewsInfoDetail?seqNo= 인라인 noticeUrl
+    # 파싱 후 정적 본문 HTML을 별도 GET → KRCD0305 핸들러 처리
+    # 본문은 'BC카드' 표기 → 자기 기관 판별용 alias 등록
+    enabled: true
+    aliases: [BC카드, BC, wisebiz, 와이즈비즈]
+    list_url: https://corp.bccard.com/app/wisebiz/NewsInfoInq
+
+  - code: KRCD0306
+    name: 신한카드
+    category: 카드
+    enabled: true
+    list_url: https://www.shinhancard.com/cconts/html/customer/CRP57000/CRP57110/CRP57110.html
+
+  - code: KRCD0307
+    name: 씨티카드
+    category: 카드
+    enabled: false
+    list_url: https://www.citicard.co.kr/
+
+  - code: KRCD0309
+    name: 우리카드
+    category: 카드
+    enabled: false
+    list_url: https://www.wooricard.com/
+
+  - code: KRCD0311
+    name: 롯데카드
+    category: 카드
+    enabled: true
+    list_url: https://corp.lottecard.co.kr/app/LCCSTAA_V100.lc
+    max_items: 15
+
+  - code: KRCD0313
+    name: 하나카드
+    category: 카드
+    enabled: false
+    list_url: https://www.hanacard.co.kr/
+
+  - code: KRCD0315
+    name: 전북카드
+    category: 카드
+    enabled: false
+    list_url: https://card.jbbank.co.kr/
+
+  - code: KRCD0316
+    name: 광주카드
+    category: 카드
+    enabled: false
+    list_url: https://card.kjbank.com/
+
+  - code: KRCD0320
+    name: 수협카드
+    category: 카드
+    enabled: false
+    list_url: https://card.suhyup-bank.com/
+
+  - code: KRCD0321
+    name: 제주카드
+    category: 카드
+    enabled: false
+    list_url: https://card.e-jejubank.com/

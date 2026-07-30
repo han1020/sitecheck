@@ -1,0 +1,28 @@
+[Unit]
+Description=사이트 점검 자동 수집 (1회 실행)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# ── 웹 서비스와 동일하게 환경에 맞게 수정 ──────────────────────────
+User=sitecheck
+Group=sitecheck
+WorkingDirectory=/opt/siteCheck
+ExecStart=/opt/siteCheck/.venv/bin/python collect.py
+# ─────────────────────────────────────────────────────────────
+
+# 웹 서비스의 install 시 사용한 것과 동일한 브라우저 경로
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/siteCheck/.playwright
+
+StandardOutput=journal
+StandardError=journal
+
+# 수집이 멈춰도 무한 대기하지 않도록 (최대 15분)
+TimeoutStartSec=900
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 타이머로 구동되므로 [Install] 불필요 (timer 가 호출)

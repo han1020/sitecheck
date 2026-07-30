@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# 수집 결과물 / 로그 (생성 파일)
+output/
+logs/
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
