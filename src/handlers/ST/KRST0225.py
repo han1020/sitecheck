@@ -9,7 +9,8 @@ KRST0225 - IBK투자증권 (IBK Securities)
        응답: HTML (cp949)
        table.list tbody tr 의 각 행에서 ['번호','구분','제목','등록일','조회수'] 컬럼
        제목 칸 anchor 의 onclick 'ibkisNoticeView('NNN'...)' 에서 seq 추출
-  3. 상세: POST https://www.ibks.com/notice/notice_view.do?seq={seq}
+  3. 상세: GET https://www.ibks.com/notice/notice_view.do?seq={seq}
+       (과거 POST 는 2026-08 부터 error.html 리다이렉트)
        응답: HTML (cp949)
        div.board_view 내용을 detail_html / body_text 로 사용
 """
@@ -216,7 +217,9 @@ def handle(site_config) -> List[HandlerResult]:
         detail_html = ""
         body_text = ""
         try:
-            dr = s.post(detail_url, timeout=20)
+            # 2026-08: 쿼리스트링 seq를 빈 body로 POST 하면 error.html 로 리다이렉트되도록
+            # 사이트가 바뀜 → GET 으로 호출해야 상세가 온다
+            dr = s.get(detail_url, timeout=20)
             dr.raise_for_status()
             dt_text = _decode_cp949(dr)
 

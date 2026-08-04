@@ -45,6 +45,7 @@ class NoticeHit:
     service_text: str = ""    # 영향받는 업무
     reason_text: str = ""     # 사유
     error: str = ""
+    body_text: str = ""       # 공지 본문 텍스트 — 대시보드에서 제목 클릭 시 표시 (스크린샷 실패 대비)
     needs_review: bool = False  # 제목은 점검 공지인데 본문이 비어(이미지 공지 등) 자동 판별 불가 → 사람이 검토
     via_ocr: bool = False     # 이미지 공지를 OCR로 읽어 자동 감지 — 오탈자 가능성 있어 대시보드에서 구분 표시
     is_regular: bool = False  # 정기점검 baseline과 일시가 일치 — 엑셀 신규에선 제외, 대시보드엔 체크 표시
@@ -527,7 +528,7 @@ async def _scrape_site_via_handler(
                     screenshot_path=str(shot_path) if ok else "",
                     window=window, schedule_text=schedule_text,
                     service_text=service_text, reason_text=reason_text,
-                    via_ocr=True,
+                    via_ocr=True, body_text=ocr_text or "",
                 ))
                 continue
             logger.info(
@@ -567,7 +568,7 @@ async def _scrape_site_via_handler(
                 schedule_text=(format_schedule(window) or window.raw) if window else "",
                 service_text=_label_value(r.body_text, _SERVICE_LABELS, collect_bullets=True) or "",
                 reason_text=f"외부 기관({subject}) 작업",
-                needs_review=True,
+                needs_review=True, body_text=r.body_text or "",
             ))
             continue
         # 2.2) 본문이 자기 기관 점검인지 확인 (외부 기관 안내성 공지 제외)
@@ -631,6 +632,7 @@ async def _scrape_site_via_handler(
             schedule_text=schedule_text,
             service_text=service_text,
             reason_text=reason_text,
+            body_text=r.body_text or "",
         ))
 
     return hits
@@ -756,7 +758,7 @@ async def _scrape_site(
                         screenshot_path=str(shot_path) if shot_ok else "",
                         window=window, schedule_text=schedule_text,
                         service_text=service_text, reason_text=reason_text,
-                        via_ocr=True,
+                        via_ocr=True, body_text=ocr_text or "",
                     ))
                 else:
                     logger.info(
@@ -807,7 +809,7 @@ async def _scrape_site(
                             schedule_text=(format_schedule(window) or window.raw) if window else "",
                             service_text=_label_value(body_text, _SERVICE_LABELS, collect_bullets=True) or "",
                             reason_text=f"외부 기관({subject}) 작업",
-                            needs_review=True,
+                            needs_review=True, body_text=body_text or "",
                         ))
                 else:
                     why = (f"외부 기관({subject}) 작업 안내" if subject
@@ -889,6 +891,7 @@ async def _scrape_site(
                     schedule_text=schedule_text,
                     service_text=service_text,
                     reason_text=reason_text,
+                    body_text=body_text or "",
                 )
             )
 

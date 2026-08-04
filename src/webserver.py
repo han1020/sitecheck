@@ -109,6 +109,8 @@ def hit_to_dict(h: NoticeHit) -> Dict[str, Any]:
         "window_start": win.start.isoformat() if win and win.start else "",
         "window_end": win.end.isoformat() if win and win.end else "",
         "error": h.error,
+        # 제목 클릭 시 본문 보기용 (스크린샷 실패 사이트 대비). JSON 비대 방지로 8000자 제한
+        "body_text": (h.body_text or "")[:8000],
         "needs_review": getattr(h, "needs_review", False),
         "via_ocr": getattr(h, "via_ocr", False),
         # 정기점검 baseline과 일시 일치 — 엑셀 신규 제외, 대시보드 체크 표시
@@ -848,6 +850,16 @@ _INDEX_HTML = """<!DOCTYPE html>
   tr.dragging { opacity: .45; }
   tr.drag-over-top td { box-shadow: inset 0 3px 0 #2563eb; }
   tr.drag-over-bottom td { box-shadow: inset 0 -3px 0 #2563eb; }
+  #bodyOverlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: center; justify-content: center; z-index: 60; }
+  #bodyOverlay .body-box { background: #fff; max-width: 760px; width: 92%; max-height: 84vh;
+    border-radius: 8px; padding: 20px 24px; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,.35); }
+  #bodyOverlay h3 { margin: 0 0 12px; font-size: 16px; }
+  #bodyOverlay .body-text { white-space: pre-wrap; word-break: break-all; font-size: 13px;
+    line-height: 1.6; color: #333; }
+  .title-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted;
+    text-underline-offset: 3px; }
+  .title-link:hover { color: #0b62d6; }
   #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center;
              justify-content: center; z-index: 50; }
   #overlay img { max-width: 92%; max-height: 92%; border-radius: 6px; }
@@ -1020,6 +1032,12 @@ _INDEX_HTML = """<!DOCTYPE html>
 </div>
 
 <div id="overlay" onclick="this.style.display='none'"><img id="overlayImg" src=""/></div>
+<div id="bodyOverlay" onclick="if(event.target===this)this.style.display='none'">
+  <div class="body-box">
+    <h3 id="bodyOverlayTitle"></h3>
+    <div class="body-text" id="bodyOverlayText"></div>
+  </div>
+</div>
 
 <script>
 let polling = null;
@@ -1108,6 +1126,7 @@ async function loadRun(runId){
   // 본문
   const tb = document.getElementById('rows');
   const rows = d.matched || [];
+  curMatched = rows;
   if(rows.length === 0){
     tb.innerHTML = '<tr><td colspan="10" class="muted">감지된 점검 공지가 없습니다.</td></tr>';
   } else {
@@ -1133,7 +1152,7 @@ async function loadRun(runId){
         <td><span class="tag">${esc(h.category)}</span></td>
         <td>${esc(h.site_code)}</td>
         <td>${esc(h.site_name)}</td>
-        <td class="title-cell">${regBadge}${ocrBadge}${esc(h.title)}</td>
+        <td class="title-cell">${regBadge}${ocrBadge}${h.body_text ? `<span class="title-link" title="클릭하면 공지 본문을 봅니다" onclick="showBody(curMatched[${i}])">${esc(h.title)}</span>` : esc(h.title)}</td>
         ${schedCell}
         ${svcCell}
         <td>${esc(h.reason_text || h.title)}</td>
@@ -1156,7 +1175,7 @@ async function loadRun(runId){
         <td><span class="tag">${esc(h.category)}</span></td>
         <td>${esc(h.site_code)}</td>
         <td>${esc(h.site_name)}</td>
-        <td>${esc(h.title)}${(h.reason_text || h.schedule_text) ? `<div class="muted" style="font-size:12px">${esc([h.reason_text, h.schedule_text].filter(Boolean).join(' · '))}</div>` : ''}</td>
+        <td>${h.body_text ? `<span class="title-link" title="클릭하면 공지 본문을 봅니다" onclick="showBody(curReview[${i}])">${esc(h.title)}</span>` : esc(h.title)}${(h.reason_text || h.schedule_text) ? `<div class="muted" style="font-size:12px">${esc([h.reason_text, h.schedule_text].filter(Boolean).join(' · '))}</div>` : ''}</td>
         <td>${esc(h.posted_date)}</td>
         <td>${h.detail_url ? `<a href="${esc(h.detail_url)}" target="_blank">열기</a>` : '<span class="muted">-</span>'}</td>
         <td>${h.screenshot_url ? `<img class="thumb" src="${esc(h.screenshot_url)}" onclick="zoom('${esc(h.screenshot_url)}')"/>` : '<span class="muted">-</span>'}</td>
@@ -1168,6 +1187,7 @@ async function loadRun(runId){
   }
 }
 
+let curMatched = [];
 let curReview = [];
 let curExcelName = '';
 let curRunId = '';
@@ -1488,6 +1508,14 @@ async function addToExcel(i, btn){
 function zoom(src){
   document.getElementById('overlayImg').src = src;
   document.getElementById('overlay').style.display = 'flex';
+}
+
+// 제목 클릭 → 공지 본문 모달 (스크린샷이 안 잡히는 사이트 대비)
+function showBody(h){
+  if(!h || !h.body_text) return;
+  document.getElementById('bodyOverlayTitle').textContent = h.title || '';
+  document.getElementById('bodyOverlayText').textContent = h.body_text;
+  document.getElementById('bodyOverlay').style.display = 'flex';
 }
 
 // ---- 뷰 전환 ----
