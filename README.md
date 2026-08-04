@@ -82,13 +82,31 @@ python serve.py --host 0.0.0.0 --port 8000   # 사내망 등 외부 접속 허�
 
 ## 리눅스 서버 배포 + 자동 수집
 
-상시 운영(웹 상주 + 화/금 13:00 자동 수집)은 systemd로 구성합니다. 자세한 절차는 [`deploy/DEPLOY.md`](deploy/DEPLOY.md) 참고.
+상시 운영(웹 상주 + 화/금 13:00 자동 수집)은 서버 환경에 따라 두 가지 방식 중 하나로 구성합니다.
+
+### 방식 A — venv + systemd (최신 OS)
+
+Ubuntu 22.04+, Rocky/Alma 9 등 Playwright Chromium이 직접 실행되는 서버용. 자세한 절차는 [`deploy/DEPLOY.md`](deploy/DEPLOY.md) 참고.
 
 - `sitecheck-web.service` — 웹 대시보드 상주 (`serve.py`)
 - `sitecheck-collect.timer` — **매주 화·금 13:00**(서버 로컬 시간) 트리거. `Persistent=true`로 서버가 꺼져 시각을 놓치면 부팅 후 1회 보충 실행.
 - `sitecheck-collect.service` — 타이머가 호출하는 1회 수집(`collect.py`). 웹의 '지금 수집'과 동일 파이프라인이라 결과가 감지 목록·엑셀뷰에 바로 반영됩니다.
 
-> 타이머의 `13:00`은 **서버 로컬 시간** 기준이므로, 한국 시간으로 돌리려면 `sudo timedatectl set-timezone Asia/Seoul` 로 시간대를 먼저 맞추세요. 스케줄 변경은 `.timer`의 `OnCalendar=` 한 줄만 수정합니다.
+### 방식 B — Docker (CentOS 7 등 구형 OS)
+
+CentOS 7처럼 glibc가 낡아 Playwright Chromium이 실행되지 않는(요구 glibc 2.28+, CentOS 7은 2.17) 서버용. 자세한 절차는 [`deploy/docker/DOCKER.md`](deploy/docker/DOCKER.md) 참고.
+
+```bash
+sudo docker compose build            # 이미지 빌드 (Chromium·torch 포함, 최초 10분+)
+sudo docker compose up -d web        # 웹 대시보드 상주 (restart: unless-stopped)
+sudo docker compose run --rm collect # 수집 1회 실행 (타이머가 이 명령을 호출)
+```
+
+- 스케줄 구조는 방식 A와 동일 — `deploy/docker/`의 timer/service가 화·금 13:00에 `docker compose run --rm collect`를 실행합니다.
+- `config/`·`output/`·`logs/`는 호스트 디렉토리를 볼륨 마운트하므로 데이터가 컨테이너 밖에 남고, 웹에서 수정하는 `review_skips.yaml`·`regular_maintenance.yaml`도 유지됩니다.
+- 컨테이너 시간대는 `Asia/Seoul`로 고정되어 있습니다 (Dockerfile `TZ`).
+
+> 두 방식 모두 타이머의 `13:00`은 **서버 로컬 시간** 기준이므로, 한국 시간으로 돌리려면 `sudo timedatectl set-timezone Asia/Seoul` 로 시간대를 먼저 맞추세요. 스케줄 변경은 `.timer`의 `OnCalendar=` 한 줄만 수정합니다.
 
 ## 설정 파일
 
@@ -271,11 +289,17 @@ logs/
 ├── serve.py                              # 웹 대시보드 서버 진입점 (--host/--port)
 ├── collect.py                            # 자동 수집 1회 실행 진입점 (systemd timer용)
 ├── requirements.txt
-├── deploy/                               # 리눅스 systemd 배포 파일
-│   ├── DEPLOY.md                         # 배포 가이드
+├── Dockerfile                            # Docker 이미지 (python3.11 + Chromium + CPU torch)
+├── docker-compose.yml                    # web(상주) + collect(1회 실행) 서비스
+├── deploy/                               # 리눅스 배포 파일
+│   ├── DEPLOY.md                         # venv+systemd 배포 가이드 (최신 OS)
 │   ├── sitecheck-web.service             # 웹 대시보드 상주 서비스
 │   ├── sitecheck-collect.service         # 수집 1회 실행 (oneshot)
-│   └── sitecheck-collect.timer           # 화/금 13:00 트리거
+│   ├── sitecheck-collect.timer           # 화/금 13:00 트리거
+│   └── docker/                           # Docker 배포 (CentOS 7 등 구형 OS)
+│       ├── DOCKER.md                     # Docker 배포 가이드
+│       ├── sitecheck-collect.service     # docker compose run --rm collect 호출
+│       └── sitecheck-collect.timer       # 화/금 13:00 트리거
 ├── config/
 │   ├── sites.yaml                        # 사이트 목록 + enabled 플래그
 │   ├── keywords.yaml                     # 점검/제외 키워드
@@ -344,8 +368,15 @@ logs/
 - `playwright._impl._errors.Error: Executable doesn't exist` → `playwright install chromium` 미실행
 - 특정 사이트만 결과 0건 → `logs/run_*.log` 확인. "본문에서 점검 일시 파싱 실패" 다발이면 정규식 보강 필요
 - 엑셀이 일부 깨져 보임 → 한글 폰트가 없는 환경. macOS/Windows 기본 한글 폰트 환경에서 정상
+- (Docker) 수집이 돌다가 결과 없이 끝나고 `output/json`이 빔 → 컨테이너가 도중에 죽고 `restart` 정책으로 조용히 재시작된 것. `sudo docker inspect sitecheck-web --format '{{.RestartCount}}'`가 0보다 크면 확정. `dmesg`에 `invalid opcode ... libtorch_cpu.so`가 있으면 CPU가 AVX2 미지원인 경우로, 기본값(OCR 비양자화)에서는 발생하지 않아야 하나 `SITECHECK_OCR_QUANTIZE=1`을 켰다면 끄세요.
+- (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-07)
+
+### Docker 배포 구성 + OCR 크래시 수정 (2026-07-30)
+
+- **Docker 배포 경로 추가** (`Dockerfile`, `docker-compose.yml`, `deploy/docker/`): CentOS 7 등 glibc가 낡아 Playwright Chromium이 직접 실행되지 않는 서버용. 웹 상주 + systemd timer 수집 구조는 venv 방식과 동일하며, 타이머가 `docker compose run --rm collect`를 호출한다. easyocr가 끌어오는 torch는 CUDA 포함 기본 휠(2GB+) 대신 CPU 휠로 고정.
+- **OCR 양자화 기본 비활성화** (`src/ocr.py`): easyocr 기본값(quantize=True)의 fbgemm 커널은 AVX2 필수라, 미지원 CPU에서 이미지 공지 인식 진입 시 `invalid opcode`(SIGILL)로 프로세스가 통째로 죽는다 — 예외로 잡을 수 없고, 수집 결과 저장 전에 죽어 `output/json`이 비는 형태로 나타났다. 기본을 `quantize=False`로 바꾸고 AVX2가 확실한 환경에서만 `SITECHECK_OCR_QUANTIZE=1`로 켜도록 변경.
 
 ### 국세청 홈택스 수집 추가 (2026-07-21)
 
