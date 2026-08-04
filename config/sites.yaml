@@ -181,72 +181,84 @@ sites:
     name: 대신저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://bank.daishin.com/sub.do?code=03_news02
 
   - code: KRBK0103
     name: SBI저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.sbisb.co.kr/cum0020300.jct
 
   - code: KRBK0104
     name: 애큐온저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.acuonsb.co.kr/sv_hki0040110.act
 
   - code: KRBK0105
     name: 웰컴저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.welcomebank.co.kr/ib20/mnu/IBNBKINTC000
 
   - code: KRBK0106
     name: KB저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.kbsavings.com/websquare/websquare.jsp?w2xPath=/jsp/companyMng/prCenter/noticeList.xml
 
   - code: KRBK0107
     name: 푸른저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.prsb.co.kr/
 
   - code: KRBK0108
     name: 하나저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.hanasavings.com/CUS/CUS0101
 
   - code: KRBK0109
     name: DB저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.idbsb.com/
 
   - code: KRBK0110
     name: NH저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.nhsavingsbank.co.kr/notice/list.do
 
   - code: KRBK0111
     name: OSB저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.osb.co.kr/ib20/mnu/HOM00034
 
   - code: KRBK0112
     name: BNK저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.bnksb.com/sub.do?code=03_news02
 
   - code: KRBK0113
     name: 신한저축은행
     category: 저축은행
     enabled: true
+    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
     list_url: https://www.shinhansavings.com/
 
   # ===================== 공공 / 기타 =====================

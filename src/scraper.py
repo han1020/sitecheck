@@ -25,7 +25,7 @@ from .handlers import get_handler, has_handler
 from .handlers.base import HandlerResult
 from .keyword_matcher import (
     build_institution_roster, external_subject, is_maintenance,
-    is_own_institution_notice, maintenance_verdict,
+    is_own_institution_notice, maintenance_verdict, normalize,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,14 @@ class NoticeHit:
     via_ocr: bool = False     # 이미지 공지를 OCR로 읽어 자동 감지 — 오탈자 가능성 있어 대시보드에서 구분 표시
     is_regular: bool = False  # 정기점검 baseline과 일시가 일치 — 엑셀 신규에선 제외, 대시보드엔 체크 표시
     regular_reason: str = ""  # 일치한 baseline의 사유 (대시보드 툴팁용)
+
+
+def _review_external(subject: str, keywords: KeywordConfig) -> bool:
+    """외부기관 작업 공지를 버리지 않고 '검토 필요'로 보낼 기관인지 (keywords.yaml external_review)."""
+    s = normalize(subject)
+    if not s:
+        return False
+    return any(normalize(k) in s for k in keywords.external_review if k)
 
 
 def _note_skip(skips: Optional[List[dict]], site: SiteConfig, title: str,
@@ -532,7 +540,37 @@ async def _scrape_site_via_handler(
                 window=None, needs_review=True,
             ))
             continue
-        # 2) 본문이 자기 기관 점검인지 확인 (외부 기관 안내성 공지 제외)
+        # 2) 점검 주체가 남의 기관인지 먼저 확인. external_review 기관(금융결제원·코스콤 등)의
+        #    작업이면 버리지 않고 '검토 필요'로 보낸다 — 인증서 등 자사 서비스 영향 가능성.
+        subject = external_subject(
+            r.title, site.name, getattr(site, "aliases", None), roster or set()
+        )
+        if subject and _review_external(subject, keywords):
+            window = extract_window(r.body_text) if r.body_text else None
+            ref = (window.end or window.start) if window else None
+            if ref and ref < now:
+                logger.info(
+                    f"[{site.code}] 외부 기관({subject}) 작업, 이미 지난 점검({ref:%Y-%m-%d %H:%M}), skip: {r.title}"
+                )
+                _note_skip(skips, site, r.title,
+                           f"외부 기관({subject}) 작업 안내 (이미 지난 점검)",
+                           r.detail_url, r.posted_date)
+                continue
+            logger.info(
+                f"[{site.code}] 외부 기관({subject}) 작업 안내 → 검토 목록에 추가: {r.title}"
+            )
+            hits.append(NoticeHit(
+                site_code=site.code, site_name=site.name, category=site.category,
+                title=r.title, posted_date=r.posted_date, detail_url=r.detail_url,
+                screenshot_path="",
+                window=window,
+                schedule_text=(format_schedule(window) or window.raw) if window else "",
+                service_text=_label_value(r.body_text, _SERVICE_LABELS, collect_bullets=True) or "",
+                reason_text=f"외부 기관({subject}) 작업",
+                needs_review=True,
+            ))
+            continue
+        # 2.2) 본문이 자기 기관 점검인지 확인 (외부 기관 안내성 공지 제외)
         if not is_own_institution_notice(r.body_text, site.name, getattr(site, "aliases", None)):
             logger.info(
                 f"[{site.code}] 외부 기관 안내로 판단(본문에 {site.name} 미등장), "
@@ -543,10 +581,7 @@ async def _scrape_site_via_handler(
                        r.detail_url, r.posted_date)
             continue
         # 2.5) 본문에 자기 기관명이 있어도 점검 '주체'가 남의 기관이면 제외
-        #      (인사말·피해 기관 언급만으로 2)를 통과하는 케이스)
-        subject = external_subject(
-            r.title, site.name, getattr(site, "aliases", None), roster or set()
-        )
+        #      (인사말·피해 기관 언급만으로 2.2)를 통과하는 케이스)
         if subject:
             logger.info(
                 f"[{site.code}] 외부 기관({subject}) 작업 안내로 판단, skip: {r.title}"
@@ -752,10 +787,33 @@ async def _scrape_site(
                 title, site.name, getattr(site, "aliases", None), roster or set()
             )
             if not_own or subject:
-                why = (f"외부 기관({subject}) 작업 안내" if subject
-                       else f"외부 기관 안내(본문에 {site.name} 미등장)")
-                logger.info(f"[{site.code}] {why}로 판단, skip: {title}")
-                _note_skip(skips, site, title, why, detail_url or "", posted_date)
+                if subject and _review_external(subject, keywords):
+                    # external_review 기관(금융결제원·코스콤 등) 작업 → '검토 필요'로 보낸다
+                    window = extract_window(body_text) if body_text else None
+                    ref = (window.end or window.start) if window else None
+                    if ref and ref < datetime.now():
+                        _note_skip(skips, site, title,
+                                   f"외부 기관({subject}) 작업 안내 (이미 지난 점검)",
+                                   detail_url or "", posted_date)
+                    else:
+                        logger.info(
+                            f"[{site.code}] 외부 기관({subject}) 작업 안내 → 검토 목록에 추가: {title}"
+                        )
+                        hits.append(NoticeHit(
+                            site_code=site.code, site_name=site.name, category=site.category,
+                            title=title, posted_date=posted_date, detail_url=detail_url or "",
+                            screenshot_path="",
+                            window=window,
+                            schedule_text=(format_schedule(window) or window.raw) if window else "",
+                            service_text=_label_value(body_text, _SERVICE_LABELS, collect_bullets=True) or "",
+                            reason_text=f"외부 기관({subject}) 작업",
+                            needs_review=True,
+                        ))
+                else:
+                    why = (f"외부 기관({subject}) 작업 안내" if subject
+                           else f"외부 기관 안내(본문에 {site.name} 미등장)")
+                    logger.info(f"[{site.code}] {why}로 판단, skip: {title}")
+                    _note_skip(skips, site, title, why, detail_url or "", posted_date)
                 # 목록으로 복귀 후 다음 행
                 try:
                     if page.url != list_page_url:

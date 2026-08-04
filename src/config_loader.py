@@ -38,6 +38,11 @@ class KeywordConfig:
     # 외부기관 자동 감지용 명부 보강. sites.yaml 의 기관명과 합쳐 쓴다.
     external_orgs: List[str] = field(default_factory=list)
     institution_aliases: List[str] = field(default_factory=list)
+    # 외부기관 작업 안내라도 버리지 않고 '검토 필요'로 보낼 기관 (예: 금융결제원, 코스콤 —
+    # 인증서 등 자사 서비스 영향 가능성이 있어 사람이 확인)
+    external_review: List[str] = field(default_factory=list)
+    # 업무 라벨 값에 있으면 제외 검사 없이 무조건 점검 공지로 판단 (예: 인터넷뱅킹)
+    force_include_service: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +72,10 @@ def load_keywords(path: Path) -> KeywordConfig:
         external_orgs=[k.strip() for k in data.get("external_orgs", []) if k.strip()],
         institution_aliases=[
             k.strip() for k in data.get("institution_aliases", []) if k.strip()
+        ],
+        external_review=[k.strip() for k in data.get("external_review", []) if k.strip()],
+        force_include_service=[
+            k.strip() for k in data.get("force_include_service", []) if k.strip()
         ],
     )
 

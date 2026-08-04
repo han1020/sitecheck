@@ -970,7 +970,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 
   <!-- 검토 필요 -->
   <div id="viewReview" style="display:none">
-    <h2>검토 필요 — 제목은 점검 공지이나 본문이 비어(이미지 공지 등) 자동 판별 불가</h2>
+    <h2>검토 필요 — 본문이 비어(이미지 공지 등) 자동 판별 불가하거나, 외부 기관(금융결제원·코스콤 등) 작업이라 영향 확인이 필요한 공지</h2>
     <div class="legend">
       아래 항목은 <b>엑셀에 자동 반영되지 않습니다.</b> 캡처를 열어 확인한 뒤,
       실제 점검이면 엑셀뷰에서 직접 행을 추가/편집하세요.
@@ -1156,7 +1156,7 @@ async function loadRun(runId){
         <td><span class="tag">${esc(h.category)}</span></td>
         <td>${esc(h.site_code)}</td>
         <td>${esc(h.site_name)}</td>
-        <td>${esc(h.title)}</td>
+        <td>${esc(h.title)}${(h.reason_text || h.schedule_text) ? `<div class="muted" style="font-size:12px">${esc([h.reason_text, h.schedule_text].filter(Boolean).join(' · '))}</div>` : ''}</td>
         <td>${esc(h.posted_date)}</td>
         <td>${h.detail_url ? `<a href="${esc(h.detail_url)}" target="_blank">열기</a>` : '<span class="muted">-</span>'}</td>
         <td>${h.screenshot_url ? `<img class="thumb" src="${esc(h.screenshot_url)}" onclick="zoom('${esc(h.screenshot_url)}')"/>` : '<span class="muted">-</span>'}</td>

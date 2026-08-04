@@ -24,6 +24,8 @@ def maintenance_verdict(
       - (False, "제외 키워드 …") : include 매칭됐으나 exclude 류에 걸림 — 스킵 목록에 노출할 가치가 있다
       - (False, "")              : include 키워드 자체가 없음 (일반 공지 — 기록 불필요)
 
+    - force_include_service 키워드: 업무(service) 라벨 값에 있으면 include/exclude
+        검사와 무관하게 무조건 True (예: '인터넷뱅킹' — 핵심 채널 영향 공지는 놓치지 않는다)
     - include 키워드: 제목에 하나라도 포함되어야 True
     - exclude_title 키워드: 제목에만 매칭. 라벨 값에 정상적으로 등장할 수 있는
         단어용 (예: 'CD공동망'은 광주은행 업무 값 '전자금융공동망, CD공동망 …'에
@@ -43,12 +45,18 @@ def maintenance_verdict(
 
     has_include = any(normalize(kw) in t for kw in keywords.include)
 
+    r = normalize(reason_text) if reason_text else ""
+    s = normalize(service_text) if service_text else ""
+
+    # 업무 라벨에 force_include_service 키워드(예: 인터넷뱅킹)가 있으면
+    # 어떤 제외 검사에도 걸리지 않고 무조건 점검 공지로 판단한다.
+    # 핵심 채널이 영향 업무에 명시된 공지는 놓치면 안 된다는 운영 요구.
+    if s and any(normalize(kw) in s for kw in keywords.force_include_service):
+        return True, ""
+
     for ex in keywords.exclude_title:
         if normalize(ex) in t:
             return False, (f"제외 키워드 '{ex}' (제목 전용)" if has_include else "")
-
-    r = normalize(reason_text) if reason_text else ""
-    s = normalize(service_text) if service_text else ""
 
     for ex in keywords.exclude:
         ex_n = normalize(ex)
