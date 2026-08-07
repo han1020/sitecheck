@@ -140,7 +140,9 @@ def _build_rows(
     # (sort_key, kind, code, name, schedule, service, reason, is_new, url, shot)
     general_items: list[tuple] = []
     hit_keys: set[tuple[str, str]] = set()
-    carried_keys: set[tuple[str, str]] = {(c.code, c.schedule.strip()) for c in carried}
+    carried_by_key: dict[tuple[str, str], CarryoverEntry] = {
+        (c.code, c.schedule.strip()): c for c in carried
+    }
 
     # 1) 신규 감지(이번 실행에서 잡힌 hit). 본문에서 새로 추출한 값을 사용.
     #    단, 이전 엑셀에 동일 (기관, 일시)가 이미 있었으면 '진짜 신규'가 아니므로
@@ -151,14 +153,21 @@ def _build_rows(
         sched = h.schedule_text or ""
         dedup_key = sched.strip() if sched else f"{h.title}|{h.posted_date}"
         hit_keys.add((h.site_code, dedup_key))
-        is_truly_new = (h.site_code, dedup_key) not in carried_keys
+        prev = carried_by_key.get((h.site_code, dedup_key))
+        service = h.service_text or ""
         reason = _resolve_reason_text(h.title, getattr(h, "reason_text", ""))
+        if prev is not None:
+            # 이미 이전 엑셀에 있던 행 = 사용자가 업무·사유를 손으로 고쳤을 수 있다.
+            # 재수집 값으로 덮어쓰면 수정분이 매번 날아가므로 이전 값을 유지한다.
+            # (이전 값이 비어 있을 때만 이번에 추출한 값으로 채운다.)
+            service = prev.service or service
+            reason = prev.reason or reason
         sort_dt = h.window.start if (h.window and h.window.start) else datetime.max
         general_items.append((
             sort_dt, h.site_code,
             _kind_for_hit(h), h.site_code, h.site_name, sched,
-            h.service_text or "", reason,
-            is_truly_new, h.detail_url, h.screenshot_path,
+            service, reason,
+            prev is None, h.detail_url, h.screenshot_path,
         ))
 
     # 2) carryover - 신규 hit이 같은 키로 이미 추가했으면 skip (배경 흰색)
@@ -243,7 +252,8 @@ def write_excel(
     meta["A2"] = "생성 시각"
     meta["B2"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     meta["A3"] = "신규 감지 건수"
-    meta["B3"] = sum(1 for h in hits if _is_new_hit(h))
+    # 이전 엑셀에 이미 있던 건(노란색 없음)은 제외한 '진짜 신규' 수
+    meta["B3"] = sum(1 for r in rows if r[6])
     meta["A4"] = "이전 carryover 건수"
     meta["B4"] = len(carried or [])
     meta["A5"] = "에러 사이트 수"
@@ -267,7 +277,7 @@ def write_excel(
     wb.save(out_path)
     logger.info(
         f"엑셀 저장: {out_path} "
-        f"(신규 {sum(1 for h in hits if _is_new_hit(h))}건 "
+        f"(신규 {sum(1 for r in rows if r[6])}건 "
         f"+ 정기 {len(regular)}건)"
     )
     return out_path
