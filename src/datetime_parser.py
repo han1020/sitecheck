@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from dateutil import parser as du_parser
 
@@ -145,65 +145,82 @@ def _to_dt(s: str, base_year: Optional[int] = None) -> Optional[datetime]:
         return None
 
 
-def extract_window(text: str) -> Optional[MaintenanceWindow]:
-    """본문 텍스트에서 점검 시작/종료 시각 추출."""
+def _window_from_range_match(m: "re.Match[str]") -> MaintenanceWindow:
+    """_RANGE_PATTERNS 매치 하나를 MaintenanceWindow로 변환."""
+    start = _to_dt(m.group("s"))
+    e_raw = m.group("e").strip()
+    # 종료 토큰 앞의 시간 접두어(오전/오후/새벽 등)는 떼고 시각만 본다
+    e_raw = re.sub(r"^(?:새벽|아침|오전|낮|오후|저녁|밤|정오)\s*", "", e_raw).strip()
+    # 종료가 '시간만'(HH:MM / N시)이면 시작 일자에 시간만 결합
+    if start and _TIME_ONLY_RE.fullmatch(e_raw):
+        nums = re.findall(r"\d+", e_raw)
+        hour = int(nums[0])
+        minute = int(nums[1]) if len(nums) > 1 else 0
+        extra = 0
+        if hour >= 24:
+            hour -= 24
+            extra = 1
+        try:
+            end = start.replace(hour=hour, minute=minute,
+                                second=0, microsecond=0) + timedelta(days=extra)
+            if end < start:
+                end = end + timedelta(days=1)
+        except (ValueError, IndexError):
+            end = None
+    elif start and (dm := _DAY_ONLY_END_RE.match(e_raw)):
+        # 종료가 '일(日)+시각'만 (예: '20일(월) 04:00') → 월/연도는 시작에서 상속
+        day = int(dm.group(1))
+        nums = re.findall(r"\d+", dm.group(2))
+        hour = int(nums[0])
+        minute = int(nums[1]) if len(nums) > 1 else 0
+        extra = 0
+        if hour >= 24:
+            hour -= 24
+            extra = 1
+        try:
+            end = start.replace(day=day, hour=hour, minute=minute,
+                                second=0, microsecond=0) + timedelta(days=extra)
+            if end < start:  # 월을 넘어가는 경우 (예: 1/31 23:00 ~ 1일 04:00)
+                end = ((start.replace(day=1) + timedelta(days=32))
+                       .replace(day=day, hour=hour, minute=minute,
+                                second=0, microsecond=0) + timedelta(days=extra))
+        except ValueError:
+            end = None
+    else:
+        end = _to_dt(e_raw, base_year=start.year if start else None)
+        if start and end and end < start:
+            end = end + timedelta(days=1)
+    return MaintenanceWindow(start=start, end=end, raw=m.group(0))
+
+
+def extract_windows(text: str) -> List[MaintenanceWindow]:
+    """본문에서 점검 창을 모두 추출 — 한 공지에 일시가 여러 개 나열된 경우 대응.
+
+    (예: 씨티은행 '중지일시: 2026.08.02 01:00~17:00 / 2026.08.09 01:00~17:00')
+    범위(시작~종료) 매치를 문서 순서대로 반환하며, 파싱 결과가 같은 창은 하나만 남긴다.
+    범위 매치가 없으면 기존 단일 폴백(시작만 / 날짜·시간대 분리형)을 1건 리스트로 반환.
+    """
     if not text:
-        return None
+        return []
     text = re.sub(r"\s+", " ", text)
 
+    windows: List[MaintenanceWindow] = []
+    seen: set = set()
     for pat in _RANGE_PATTERNS:
-        m = pat.search(text)
-        if not m:
-            continue
-        start = _to_dt(m.group("s"))
-        e_raw = m.group("e").strip()
-        # 종료 토큰 앞의 시간 접두어(오전/오후/새벽 등)는 떼고 시각만 본다
-        e_raw = re.sub(r"^(?:새벽|아침|오전|낮|오후|저녁|밤|정오)\s*", "", e_raw).strip()
-        # 종료가 '시간만'(HH:MM / N시)이면 시작 일자에 시간만 결합
-        if start and _TIME_ONLY_RE.fullmatch(e_raw):
-            nums = re.findall(r"\d+", e_raw)
-            hour = int(nums[0])
-            minute = int(nums[1]) if len(nums) > 1 else 0
-            extra = 0
-            if hour >= 24:
-                hour -= 24
-                extra = 1
-            try:
-                end = start.replace(hour=hour, minute=minute,
-                                    second=0, microsecond=0) + timedelta(days=extra)
-                if end < start:
-                    end = end + timedelta(days=1)
-            except (ValueError, IndexError):
-                end = None
-        elif start and (dm := _DAY_ONLY_END_RE.match(e_raw)):
-            # 종료가 '일(日)+시각'만 (예: '20일(월) 04:00') → 월/연도는 시작에서 상속
-            day = int(dm.group(1))
-            nums = re.findall(r"\d+", dm.group(2))
-            hour = int(nums[0])
-            minute = int(nums[1]) if len(nums) > 1 else 0
-            extra = 0
-            if hour >= 24:
-                hour -= 24
-                extra = 1
-            try:
-                end = start.replace(day=day, hour=hour, minute=minute,
-                                    second=0, microsecond=0) + timedelta(days=extra)
-                if end < start:  # 월을 넘어가는 경우 (예: 1/31 23:00 ~ 1일 04:00)
-                    end = ((start.replace(day=1) + timedelta(days=32))
-                           .replace(day=day, hour=hour, minute=minute,
-                                    second=0, microsecond=0) + timedelta(days=extra))
-            except ValueError:
-                end = None
-        else:
-            end = _to_dt(e_raw, base_year=start.year if start else None)
-            if start and end and end < start:
-                end = end + timedelta(days=1)
-        return MaintenanceWindow(start=start, end=end, raw=m.group(0))
+        for m in pat.finditer(text):
+            w = _window_from_range_match(m)
+            key = (w.start, w.end)
+            if key in seen:
+                continue
+            seen.add(key)
+            windows.append(w)
+    if windows:
+        return windows
 
     m = _START_ONLY.search(text)
     if m:
         start = _to_dt(m.group("s"))
-        return MaintenanceWindow(start=start, end=None, raw=m.group(0))
+        return [MaintenanceWindow(start=start, end=None, raw=m.group(0))]
 
     # 마지막 폴백: 날짜와 시간대가 떨어져 있는 표 형식
     # (예: 부산은행 '중단일자 : 2026. 8. 9(일)' + 표 안 '00:30 ~ 08:00')
@@ -226,10 +243,16 @@ def extract_window(text: str) -> Optional[MaintenanceWindow]:
                     end = end + timedelta(days=1)
             except ValueError:
                 end = None
-            return MaintenanceWindow(start=start, end=end,
-                                     raw=f"{dm.group(0)} {tm.group(0)}")
+            return [MaintenanceWindow(start=start, end=end,
+                                      raw=f"{dm.group(0)} {tm.group(0)}")]
 
-    return None
+    return []
+
+
+def extract_window(text: str) -> Optional[MaintenanceWindow]:
+    """본문 텍스트에서 점검 시작/종료 시각 추출 (첫 번째 창만)."""
+    windows = extract_windows(text)
+    return windows[0] if windows else None
 
 
 def parse_posted_date(s: str) -> Optional[date]:

@@ -18,7 +18,7 @@ from playwright.async_api import (
 from .config_loader import KeywordConfig, SiteConfig
 from .datetime_parser import (
     MaintenanceWindow,
-    extract_window,
+    extract_windows,
     format_schedule,
 )
 from .handlers import get_handler, has_handler
@@ -124,6 +124,15 @@ def strip_already_collected(hits: List["NoticeHit"], carried) -> List["NoticeHit
     return kept
 
 
+def _future_windows(windows: List[MaintenanceWindow], now: datetime) -> List[MaintenanceWindow]:
+    """종료(없으면 시작) 시각이 아직 지나지 않은 창만 남긴다.
+
+    한 공지에 일시가 여러 개 나열된 경우(예: 씨티은행 8/2·8/9), 첫 창이
+    지났다고 공지를 통째로 버리지 않고 남은 창을 감지하기 위한 필터.
+    """
+    return [w for w in windows if (w.end or w.start) and (w.end or w.start) >= now]
+
+
 async def _ocr_extract_window(shot_path, site, now):
     """이미지 스샷을 OCR → 점검 일시(window)와 OCR 텍스트를 파싱.
 
@@ -137,12 +146,10 @@ async def _ocr_extract_window(shot_path, site, now):
     text = await asyncio.to_thread(ocr.ocr_image, str(shot_path))
     if not text:
         return None
-    window = extract_window(text)
-    if window is None:
+    future = _future_windows(extract_windows(text), now)
+    if not future:
         return None
-    ref = window.end or window.start
-    if ref is None or ref < now:
-        return None
+    window = min(future, key=lambda w: w.start or w.end)
     if not is_own_institution_notice(text, site.name, getattr(site, "aliases", None)):
         return None
     return window, text
@@ -547,7 +554,9 @@ async def _scrape_site_via_handler(
             r.title, site.name, getattr(site, "aliases", None), roster or set()
         )
         if subject and _review_external(subject, keywords):
-            window = extract_window(r.body_text) if r.body_text else None
+            windows = extract_windows(r.body_text) if r.body_text else []
+            future = _future_windows(windows, now)
+            window = future[0] if future else (windows[0] if windows else None)
             ref = (window.end or window.start) if window else None
             if ref and ref < now:
                 logger.info(
@@ -590,20 +599,23 @@ async def _scrape_site_via_handler(
             _note_skip(skips, site, r.title, f"외부 기관({subject}) 작업 안내",
                        r.detail_url, r.posted_date)
             continue
-        # 3) 본문에서 점검 일시 추출. 종료(or 시작)가 미래여야 통과
-        window = extract_window(r.body_text) if r.body_text else None
-        if window is None:
+        # 3) 본문에서 점검 일시 추출. 종료(or 시작)가 미래인 창만 통과
+        #    (한 공지에 여러 일시가 나열되면 창마다 개별 hit — 예: 씨티은행 8/2·8/9)
+        windows = extract_windows(r.body_text) if r.body_text else []
+        if not windows:
             logger.info(f"[{site.code}] 본문에서 점검 일시 파싱 실패, skip: {r.title}")
             _note_skip(skips, site, r.title, "점검 일시 파싱 실패",
                        r.detail_url, r.posted_date)
             continue
-        ref = window.end or window.start
-        if ref is None:
-            logger.info(f"[{site.code}] 점검 일시 미상, skip: {r.title}")
-            _note_skip(skips, site, r.title, "점검 일시 미상",
-                       r.detail_url, r.posted_date)
-            continue
-        if ref < now:
+        future = _future_windows(windows, now)
+        if not future:
+            refs = [w.end or w.start for w in windows if (w.end or w.start)]
+            if not refs:
+                logger.info(f"[{site.code}] 점검 일시 미상, skip: {r.title}")
+                _note_skip(skips, site, r.title, "점검 일시 미상",
+                           r.detail_url, r.posted_date)
+                continue
+            ref = max(refs)
             logger.info(
                 f"[{site.code}] 이미 지난 점검({ref:%Y-%m-%d %H:%M}), skip: {r.title}"
             )
@@ -611,7 +623,8 @@ async def _scrape_site_via_handler(
                        r.detail_url, r.posted_date)
             continue
         logger.info(
-            f"[{site.code}] 매칭 (점검 일시: {window.raw}): {r.title}"
+            f"[{site.code}] 매칭 (점검 일시 {len(future)}건: "
+            f"{' / '.join(w.raw for w in future)}): {r.title}"
         )
 
         run_date = run_id.split("_", 1)[0]
@@ -619,21 +632,21 @@ async def _scrape_site_via_handler(
         shot_path = screenshot_root / shot_name
         ok = await _screenshot_html(browser, r.detail_html, shot_path, base_url=site.list_url)
 
-        schedule_text = format_schedule(window) or (window.raw if window else "")
         service_text = _resolve_service_text(r.title, r.body_text)
         reason_text = _extract_reason(r.body_text)
 
-        hits.append(NoticeHit(
-            site_code=site.code, site_name=site.name, category=site.category,
-            title=r.title, posted_date=r.posted_date,
-            detail_url=r.detail_url,
-            screenshot_path=str(shot_path) if ok else "",
-            window=window,
-            schedule_text=schedule_text,
-            service_text=service_text,
-            reason_text=reason_text,
-            body_text=r.body_text or "",
-        ))
+        for window in future:
+            hits.append(NoticeHit(
+                site_code=site.code, site_name=site.name, category=site.category,
+                title=r.title, posted_date=r.posted_date,
+                detail_url=r.detail_url,
+                screenshot_path=str(shot_path) if ok else "",
+                window=window,
+                schedule_text=format_schedule(window) or window.raw,
+                service_text=service_text,
+                reason_text=reason_text,
+                body_text=r.body_text or "",
+            ))
 
     return hits
 
@@ -791,7 +804,9 @@ async def _scrape_site(
             if not_own or subject:
                 if subject and _review_external(subject, keywords):
                     # external_review 기관(금융결제원·코스콤 등) 작업 → '검토 필요'로 보낸다
-                    window = extract_window(body_text) if body_text else None
+                    windows = extract_windows(body_text) if body_text else []
+                    future = _future_windows(windows, datetime.now())
+                    window = future[0] if future else (windows[0] if windows else None)
                     ref = (window.end or window.start) if window else None
                     if ref and ref < datetime.now():
                         _note_skip(skips, site, title,
@@ -856,44 +871,46 @@ async def _scrape_site(
                         pass
                     continue
 
-            window = extract_window(body_text) if body_text else None
-            # 점검 종료(or 시작) 시각이 미래인지 확인
+            windows = extract_windows(body_text) if body_text else []
+            # 점검 종료(or 시작) 시각이 미래인 창만 통과
+            # (한 공지에 여러 일시가 나열되면 창마다 개별 hit — 예: 씨티은행 8/2·8/9)
             now = datetime.now()
-            if window is None:
+            if not windows:
                 logger.info(f"[{site.code}] 본문에서 점검 일시 파싱 실패, skip: {title}")
                 _note_skip(skips, site, title, "점검 일시 파싱 실패",
                            detail_url or "", posted_date)
                 continue
-            ref = window.end or window.start
-            if ref is None or ref < now:
+            future = _future_windows(windows, now)
+            if not future:
+                refs = [w.end or w.start for w in windows if (w.end or w.start)]
                 logger.info(
                     f"[{site.code}] 이미 지난 점검(또는 일시 미상), skip: {title}"
                 )
                 _note_skip(skips, site, title,
-                           (f"이미 지난 점검({ref:%Y-%m-%d %H:%M})" if ref else "점검 일시 미상"),
+                           (f"이미 지난 점검({max(refs):%Y-%m-%d %H:%M})" if refs else "점검 일시 미상"),
                            detail_url or "", posted_date)
                 continue
 
-            schedule_text = format_schedule(window) or (window.raw if window else "")
             service_text = _resolve_service_text(title, body_text)
             reason_text = _extract_reason(body_text)
 
-            hits.append(
-                NoticeHit(
-                    site_code=site.code,
-                    site_name=site.name,
-                    category=site.category,
-                    title=title,
-                    posted_date=posted_date,
-                    detail_url=detail_url or "",
-                    screenshot_path=str(shot_path) if shot_ok else "",
-                    window=window,
-                    schedule_text=schedule_text,
-                    service_text=service_text,
-                    reason_text=reason_text,
-                    body_text=body_text or "",
+            for window in future:
+                hits.append(
+                    NoticeHit(
+                        site_code=site.code,
+                        site_name=site.name,
+                        category=site.category,
+                        title=title,
+                        posted_date=posted_date,
+                        detail_url=detail_url or "",
+                        screenshot_path=str(shot_path) if shot_ok else "",
+                        window=window,
+                        schedule_text=format_schedule(window) or window.raw,
+                        service_text=service_text,
+                        reason_text=reason_text,
+                        body_text=body_text or "",
+                    )
                 )
-            )
 
             # 목록으로 복귀
             try:
