@@ -190,6 +190,8 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 | KRBK0106 | KB저축은행 | KRBK0113 | 신한저축은행 |
 | KRBK0107 | 푸른저축은행 | | |
 
+> **NH저축은행(KRBK0110)**: 2026-08-10 사이트가 React(Vite) SPA로 개편되어 기존 `/notice/list.do`·`/notice/view.do`가 사라졌습니다(HTTP 200으로 `/404.html` 리다이렉트). 공지 데이터는 `CSM0001SC` 거래전문 API로 오지만 응답이 ASTX2/VestWeb으로 **종단 암호화**되어 직접 파싱이 불가합니다. 브라우저가 이 암호문을 복호화해 DOM에 평문으로 렌더링하므로, 핸들러가 **자체 Playwright(sync)** 로 목록 페이지(`/csm/csm024_1.view`)를 렌더링한 뒤 렌더된 DOM만 읽습니다. 목록 항목은 등록일(`YYYY.MM.DD`)이 붙은 `li button`으로 식별하고(네비 메뉴 버튼은 날짜가 없어 걸러짐), 상세는 라우터 state로만 진입 가능해 **n번째 항목 클릭 → 본문(`div[class*=board-detail__content]`) 파싱 → 뒤로가기**를 반복합니다. CSS 모듈 해시 클래스라 클래스 접두사 부분일치로 셀렉트하며, 목록 렌더는 `wait_for_function` 폴링으로 기다립니다. 금리 안내처럼 본문이 이미지뿐인 공지는 본문 텍스트가 비어 스크린샷/OCR·검토 경로로 넘어갑니다.
+
 ### 증권 (22)
 
 | 코드 | 사이트 | 코드 | 사이트 |
@@ -377,6 +379,11 @@ logs/
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-08)
+
+### NH저축은행 SPA 개편 대응 (2026-08-11)
+
+- **NH저축은행(KRBK0110) 핸들러 Playwright 방식으로 재작성**: 2026-08-10 사이트가 React SPA로 전면 개편되며 기존 목록/상세 URL이 사라져(200 응답으로 `/404.html` 리다이렉트) 핸들러가 조용히 0건을 반환하던 문제. 공지 API 응답이 ASTX2/VestWeb으로 종단 암호화돼 직접 파싱이 불가하므로, 브라우저 렌더링에 의존해 복호화된 DOM만 읽는 구조로 전환했다. 세부 방식은 위 "저축은행 (13)" 섹션의 NH저축은행 노트 참고.
+- 이 개편의 계기가 된 "인터넷뱅킹 고도화 오픈 및 서비스 중단 안내"(점검 8/10 18~19시) 공지는 금요일 수집 직후 게시되고 다음 수집 전에 사이트가 개편되어 두 번의 수집 모두 놓쳤다. 핸들러가 0건을 반환해도 에러로 잡히지 않는 구조가 근본 원인.
 
 ### 필터 판정 개선 4건 (2026-08-04)
 
