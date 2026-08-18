@@ -85,6 +85,13 @@ async def run_once(headless: bool = True) -> Path:
         )
     ]
 
+    # 감지 목록에서 삭제 처리한 공지는 엑셀·감지목록에 다시 올리지 않음
+    from .matched_deletes import (filter_deleted_carried, filter_deleted_hits,
+                                  load_matched_deletes)
+    deletes = load_matched_deletes(CONFIG_DIR / "matched_deletes.yaml")
+    hits = filter_deleted_hits(hits, deletes)
+    carried = filter_deleted_carried(carried, deletes)
+
     # 결과 파일명: [사이트점검]_YYYYMMDD.xlsx
     date_compact = run_date.replace("-", "")
     out_path = EXCEL_DIR / f"[사이트점검]_{date_compact}.xlsx"

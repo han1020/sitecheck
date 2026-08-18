@@ -199,8 +199,59 @@ def _delete_screenshot_file(screenshot_url: str) -> bool:
 _json_lock = threading.Lock()
 
 
+def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    """감지 항목과 일치하는 엑셀 '일반점검' 행 삭제. {file, deleted} 반환.
+
+    run 날짜의 엑셀 파일에서 (기관코드, 일시)로 찾는다. 일시가 없는 항목은
+    (기관코드, 사유)로 대조. run 날짜 파일이 없으면(옛 run에서 삭제) 최신
+    엑셀 파일을 대상으로 한다 — 행은 carryover로 최신 파일에 살아 있다.
+    """
+    date_compact = run_id.split("_", 1)[0].replace("-", "")
+    filename = f"{_EXCEL_PREFIX}{date_compact}.xlsx"
+    if _excel_path(filename) is None:
+        excels = _list_excels()
+        if not excels:
+            return {"file": "", "deleted": 0}
+        filename = excels[0]["filename"]
+    path = _excel_path(filename)
+    if path is None:
+        return {"file": "", "deleted": 0}
+
+    code = str(item.get("site_code") or "").strip()
+    sched = str(item.get("schedule_text") or "").strip()
+    reason = ""
+    if not sched:
+        from .excel_writer import _resolve_reason_text
+        reason = _resolve_reason_text(item.get("title", ""),
+                                      item.get("reason_text", ""))
+        if not reason:
+            return {"file": filename, "deleted": 0}
+
+    deleted = 0
+    with _excel_lock:
+        wb = load_workbook(path)
+        ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
+        # 아래→위 순회: 행 삭제로 이후 행이 당겨져도 번호가 어긋나지 않음
+        for r in range(ws.max_row, _XL_HEADER_ROW, -1):
+            vals = [
+                str(ws.cell(row=r, column=_XL_DATA_START_COL + i).value or "").strip()
+                for i in range(_XL_NCOLS)
+            ]
+            if vals[0] != "일반점검" or vals[1] != code:
+                continue
+            if (sched and vals[3] == sched) or (not sched and vals[5] == reason):
+                ws.delete_rows(r, 1)
+                deleted += 1
+        if deleted:
+            wb.save(path)
+        wb.close()
+    return {"file": filename, "deleted": deleted}
+
+
 def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
-    """감지 목록에서 한 항목을 삭제하고 해당 스크린샷 파일도 함께 삭제.
+    """감지 목록에서 한 항목을 삭제: run JSON 제거 + 스크린샷 삭제 +
+    엑셀에서 해당 행 삭제 + 영구 삭제 목록(config/matched_deletes.yaml)에
+    등록해 이후 수집에서 같은 공지가 엑셀·감지 목록에 되살아나지 않게 한다.
 
     run JSON의 matched[index] 를 제거하고 count 를 갱신한다. 인덱스는 프론트가
     렌더한 matched 순서와 동일(삭제 후 목록을 다시 불러오므로 어긋나지 않음).
@@ -226,11 +277,20 @@ def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
         data["matched"] = matched
         data["count"] = len(matched)
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from .matched_deletes import add_matched_delete
+    listed = add_matched_delete(
+        CONFIG_DIR / "matched_deletes.yaml",
+        item.get("site_code", ""), item.get("title", ""),
+        item.get("schedule_text", ""),
+    )
+    excel = _delete_matched_excel_rows(run_id, item)
     logger.info(
         f"감지 항목 삭제: {run_id} [{index}] {item.get('site_code')} "
-        f"{str(item.get('title',''))[:30]} | 스샷삭제={shot_deleted}"
+        f"{str(item.get('title',''))[:30]} | 스샷삭제={shot_deleted} "
+        f"| 삭제목록 추가={listed} | 엑셀 {excel['file']} {excel['deleted']}행 삭제"
     )
-    return {"ok": True, "screenshot_deleted": shot_deleted}
+    return {"ok": True, "screenshot_deleted": shot_deleted,
+            "excel_file": excel["file"], "excel_deleted": excel["deleted"]}
 
 
 def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
@@ -700,6 +760,13 @@ async def _collect() -> None:
         return bool(w and find_regular_match(c.code, w.start, w.end, regular))
     carried = [c for c in carried if not _carry_is_regular(c)]
 
+    # 감지 목록에서 삭제 처리한 공지는 엑셀·감지목록에 다시 올리지 않음 (스킵 탭에 기록)
+    from .matched_deletes import (filter_deleted_carried, filter_deleted_hits,
+                                  load_matched_deletes)
+    deletes = load_matched_deletes(CONFIG_DIR / "matched_deletes.yaml")
+    hits = filter_deleted_hits(hits, deletes, skips_log=skips)
+    carried = filter_deleted_carried(carried, deletes)
+
     EXCEL_DIR.mkdir(parents=True, exist_ok=True)
     out_path = EXCEL_DIR / f"[사이트점검]_{today_compact}.xlsx"
     # 엑셀은 전체 hits(carryover 재감지 포함)로 작성 — 텍스트 갱신을 위해
@@ -921,7 +988,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       <tbody id="rows"><tr><td colspan="10" class="muted">데이터가 없습니다. ‘지금 수집’을 눌러 실행하세요.</td></tr></tbody>
     </table>
     <div class="legend" style="margin-top:8px">
-      🗑 삭제 시 해당 항목과 <b>캡처 스크린샷 파일</b>이 함께 삭제됩니다. (엑셀은 별도) &nbsp;·&nbsp;
+      🗑 삭제 시 해당 항목·캡처 스크린샷과 <b>엑셀의 해당 행</b>이 함께 삭제되고, 이후 수집에서도 다시 올라오지 않습니다. &nbsp;·&nbsp;
       <span class="warn-cell" style="padding:1px 6px; border-radius:4px">⚠ 표시</span> = 파싱 의심값 (업무 기본값 폴백 / 종료 시각 없음) — 원문·캡처로 확인 권장 &nbsp;·&nbsp;
       <span class="ocr-badge">OCR</span><span style="background:#eff6ff; padding:1px 6px; border-radius:4px">파란 행</span> = 이미지 공지를 OCR로 읽어 자동 감지 — 오탈자 가능성, 캡처로 확인 권장 &nbsp;·&nbsp;
       <span class="reg-badge">✓ 정기점검</span><span style="background:#f0fdf4; padding:1px 6px; border-radius:4px">초록 행</span> = 정기점검 baseline과 일시 일치 — 엑셀 신규 목록엔 미포함
@@ -1448,7 +1515,7 @@ async function saveRegular(){
 }
 
 async function deleteMatched(i, btn){
-  if(!confirm('이 감지 항목과 캡처 스크린샷을 삭제할까요?\\n(엑셀에는 영향 없음)')) return;
+  if(!confirm('이 감지 항목을 삭제할까요?\\n\\n캡처 스크린샷과 엑셀의 해당 행도 함께 삭제되고,\\n앞으로의 수집에서도 다시 올라오지 않습니다.')) return;
   btn.disabled = true;
   const r = await fetch('/api/matched/delete', {
     method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1458,6 +1525,8 @@ async function deleteMatched(i, btn){
   if(res.ok){
     await loadRuns();
     loadRun(curRunId);
+    if(curExcelFile && curExcelFile === res.excel_file) loadExcel(curExcelFile);
+    if(res.excel_deleted === 0) alert('감지 목록에서는 삭제했지만, 엑셀에서 일치하는 행을 찾지 못했습니다.\\n(이미 지웠거나 일시를 손으로 수정한 경우) 엑셀뷰에서 직접 확인하세요.');
   } else {
     btn.disabled = false;
     alert('삭제 실패: ' + (res.error || ''));
