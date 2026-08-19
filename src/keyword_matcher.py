@@ -76,6 +76,17 @@ def maintenance_verdict(
     return (True, "") if has_include else (False, "")
 
 
+def title_forces_review(title: str, keywords: KeywordConfig) -> bool:
+    """제목에 강제 검토 마커([중요] 등)가 있는지 (keywords.yaml force_review_title).
+
+    마커가 있는 공지는 어떤 필터에 걸려도 조용히 버리지 않고 '검토 필요'로 보낸다.
+    """
+    t = normalize(title)
+    if not t:
+        return False
+    return any(normalize(k) in t for k in keywords.force_review_title if k)
+
+
 def is_maintenance(
     title: str,
     keywords: KeywordConfig,

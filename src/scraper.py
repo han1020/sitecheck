@@ -26,6 +26,7 @@ from .handlers.base import HandlerResult
 from .keyword_matcher import (
     build_institution_roster, external_subject, is_maintenance,
     is_own_institution_notice, maintenance_verdict, normalize,
+    title_forces_review,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,28 @@ def _note_skip(skips: Optional[List[dict]], site: SiteConfig, title: str,
         "detail_url": detail_url or "",
         "posted_date": posted_date or "",
     })
+
+
+def _forced_review_hit(site: SiteConfig, title: str, posted_date: str,
+                       detail_url: str, why: str, body_text: str = "",
+                       screenshot_path: str = "") -> "NoticeHit":
+    """강제 검토 마커([중요] 등) 제목의 공지가 필터에 걸렸을 때 스킵 대신 만들 '검토 필요' hit.
+
+    본문에서 일시·업무를 뽑을 수 있으면 함께 실어 사람이 판단하기 쉽게 한다.
+    """
+    windows = extract_windows(body_text) if body_text else []
+    future = _future_windows(windows, datetime.now())
+    window = future[0] if future else (windows[0] if windows else None)
+    return NoticeHit(
+        site_code=site.code, site_name=site.name, category=site.category,
+        title=title, posted_date=posted_date, detail_url=detail_url,
+        screenshot_path=screenshot_path,
+        window=window,
+        schedule_text=(format_schedule(window) or window.raw) if window else "",
+        service_text=_label_value(body_text, _SERVICE_LABELS, collect_bullets=True) or "",
+        reason_text=f"강제 검토 마커 — {why}",
+        needs_review=True, body_text=body_text or "",
+    )
 
 
 _REVIEW_MAX_AGE_DAYS = 60  # 검토 대상: 등록일이 이보다 오래되면 옛 공지로 보고 제외
@@ -490,6 +513,18 @@ async def _scrape_site_via_handler(
         f"[{site.code}] handler 결과 {len(results)}건 | "
         f"점검 종료 시각이 {now:%Y-%m-%d %H:%M} 이후인 공지만 통과"
     )
+
+    def _skip_or_review(title: str, posted_date: str, detail_url: str,
+                        body_text: str, why: str) -> None:
+        """필터에 걸린 공지 처리. 제목에 강제 검토 마커([중요] 등)가 있으면
+        스킵 대신 '검토 필요'로 승격한다 (등록일 60일 초과 옛 공지는 제외)."""
+        if title_forces_review(title, keywords) and not _posted_too_old(posted_date):
+            logger.info(f"[{site.code}] 강제 검토 마커 제목({why}) → 검토 목록에 추가: {title}")
+            hits.append(_forced_review_hit(site, title, posted_date, detail_url, why, body_text))
+        else:
+            logger.info(f"[{site.code}] {why}, skip: {title}")
+            _note_skip(skips, site, title, why, detail_url, posted_date)
+
     for r in results:
         # 1) 키워드 매칭 (제목 + 본문의 '사유'·'업무' 라벨 + 본문 전체 exclude_body)
         reason_preview = _label_value(r.body_text, _REASON_LABELS)
@@ -497,8 +532,12 @@ async def _scrape_site_via_handler(
         kw_ok, kw_why = maintenance_verdict(
             r.title, keywords, reason_preview, service_preview, r.body_text)
         if not kw_ok:
+            if title_forces_review(r.title, keywords):
+                # 강제 검토 마커 제목은 include 미스(무기록 탈락)·exclude 매칭이어도 검토로 보낸다
+                _skip_or_review(r.title, r.posted_date, r.detail_url,
+                                r.body_text or "", kw_why or "점검 키워드 없음")
             # include 키워드는 맞았는데 exclude로 걸러진 경우만 스킵 기록 (일반 공지 제외)
-            if kw_why:
+            elif kw_why:
                 logger.info(f"[{site.code}] {kw_why} 매칭, skip: {r.title}")
                 _note_skip(skips, site, r.title, kw_why, r.detail_url, r.posted_date)
             continue
@@ -559,12 +598,8 @@ async def _scrape_site_via_handler(
             window = future[0] if future else (windows[0] if windows else None)
             ref = (window.end or window.start) if window else None
             if ref and ref < now:
-                logger.info(
-                    f"[{site.code}] 외부 기관({subject}) 작업, 이미 지난 점검({ref:%Y-%m-%d %H:%M}), skip: {r.title}"
-                )
-                _note_skip(skips, site, r.title,
-                           f"외부 기관({subject}) 작업 안내 (이미 지난 점검)",
-                           r.detail_url, r.posted_date)
+                _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "",
+                                f"외부 기관({subject}) 작업 안내 (이미 지난 점검)")
                 continue
             logger.info(
                 f"[{site.code}] 외부 기관({subject}) 작업 안내 → 검토 목록에 추가: {r.title}"
@@ -582,45 +617,28 @@ async def _scrape_site_via_handler(
             continue
         # 2.2) 본문이 자기 기관 점검인지 확인 (외부 기관 안내성 공지 제외)
         if not is_own_institution_notice(r.body_text, site.name, getattr(site, "aliases", None)):
-            logger.info(
-                f"[{site.code}] 외부 기관 안내로 판단(본문에 {site.name} 미등장), "
-                f"skip: {r.title}"
-            )
-            _note_skip(skips, site, r.title,
-                       f"외부 기관 안내 (본문에 {site.name} 미등장)",
-                       r.detail_url, r.posted_date)
+            _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "",
+                            f"외부 기관 안내 (본문에 {site.name} 미등장)")
             continue
         # 2.5) 본문에 자기 기관명이 있어도 점검 '주체'가 남의 기관이면 제외
         #      (인사말·피해 기관 언급만으로 2.2)를 통과하는 케이스)
         if subject:
-            logger.info(
-                f"[{site.code}] 외부 기관({subject}) 작업 안내로 판단, skip: {r.title}"
-            )
-            _note_skip(skips, site, r.title, f"외부 기관({subject}) 작업 안내",
-                       r.detail_url, r.posted_date)
+            _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "",
+                            f"외부 기관({subject}) 작업 안내")
             continue
         # 3) 본문에서 점검 일시 추출. 종료(or 시작)가 미래인 창만 통과
         #    (한 공지에 여러 일시가 나열되면 창마다 개별 hit — 예: 씨티은행 8/2·8/9)
         windows = extract_windows(r.body_text) if r.body_text else []
         if not windows:
-            logger.info(f"[{site.code}] 본문에서 점검 일시 파싱 실패, skip: {r.title}")
-            _note_skip(skips, site, r.title, "점검 일시 파싱 실패",
-                       r.detail_url, r.posted_date)
+            _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "",
+                            "점검 일시 파싱 실패")
             continue
         future = _future_windows(windows, now)
         if not future:
             refs = [w.end or w.start for w in windows if (w.end or w.start)]
-            if not refs:
-                logger.info(f"[{site.code}] 점검 일시 미상, skip: {r.title}")
-                _note_skip(skips, site, r.title, "점검 일시 미상",
-                           r.detail_url, r.posted_date)
-                continue
-            ref = max(refs)
-            logger.info(
-                f"[{site.code}] 이미 지난 점검({ref:%Y-%m-%d %H:%M}), skip: {r.title}"
-            )
-            _note_skip(skips, site, r.title, f"이미 지난 점검({ref:%Y-%m-%d %H:%M})",
-                       r.detail_url, r.posted_date)
+            why = (f"이미 지난 점검({max(refs):%Y-%m-%d %H:%M})" if refs
+                   else "점검 일시 미상")
+            _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "", why)
             continue
         logger.info(
             f"[{site.code}] 매칭 (점검 일시 {len(future)}건: "
@@ -689,6 +707,18 @@ async def _scrape_site(
         logger.info(
             f"[{site.code}] 이번 주 필터: {week_start} ~ {week_end}"
         )
+
+        def _skip_or_review(title: str, posted_date: str, detail_url: str,
+                            body_text: str, why: str) -> None:
+            """필터에 걸린 공지 처리. 제목에 강제 검토 마커([중요] 등)가 있으면
+            스킵 대신 '검토 필요'로 승격한다 (등록일 60일 초과 옛 공지는 제외)."""
+            if title_forces_review(title, keywords) and not _posted_too_old(posted_date):
+                logger.info(f"[{site.code}] 강제 검토 마커 제목({why}) → 검토 목록에 추가: {title}")
+                hits.append(_forced_review_hit(site, title, posted_date, detail_url, why, body_text))
+            else:
+                logger.info(f"[{site.code}] {why}, skip: {title}")
+                _note_skip(skips, site, title, why, detail_url, posted_date)
+
         for i in range(count):
             row = rows.nth(i)
             title = await _safe_text(row.locator(site.title_selector).first)
@@ -696,7 +726,10 @@ async def _scrape_site(
                 continue
 
             kw_ok, kw_why = maintenance_verdict(title, keywords)
-            if not kw_ok:
+            # 강제 검토 마커([중요] 등) 제목은 점검 키워드에 안 걸려도 상세에 진입해
+            # 본문을 확보한 뒤 '검토 필요'로 보낸다 (감지목록 승격은 하지 않음)
+            force_kw_review = (not kw_ok) and title_forces_review(title, keywords)
+            if not kw_ok and not force_kw_review:
                 # 제목 단계 제외 (include 매칭 + exclude 걸림)만 기록
                 if kw_why:
                     logger.info(f"[{site.code}] {kw_why} 매칭, skip: {title}")
@@ -757,7 +790,9 @@ async def _scrape_site(
                 # 이미지 OCR로 점검 일시를 읽어내면 검토 없이 바로 감지목록으로 승격
                 _now = datetime.now()
                 parsed = await _ocr_extract_window(shot_path if shot_ok else None, site, _now)
-                if parsed is not None:
+                # 강제 검토 마커 제목(점검 키워드 미스)은 OCR이 일시를 읽어도
+                # 감지목록으로 승격하지 않고 '검토 필요'로만 남긴다
+                if parsed is not None and not force_kw_review:
                     window, ocr_text = parsed
                     schedule_text = format_schedule(window) or window.raw
                     service_text = _resolve_service_text(title, ocr_text)
@@ -796,6 +831,24 @@ async def _scrape_site(
                     pass
                 continue
 
+            # 강제 검토 마커 제목인데 점검 키워드에 안 걸린 공지 → 본문까지 확보했으니
+            # 외부기관·일시 검사 없이 바로 '검토 필요'로 보낸다
+            if force_kw_review:
+                _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                kw_why or "점검 키워드 없음")
+                try:
+                    if page.url != list_page_url:
+                        await page.goto(site.list_url, wait_until="domcontentloaded", timeout=20000)
+                        if site.wait_selector:
+                            try:
+                                await page.wait_for_selector(site.wait_selector, timeout=10000)
+                            except PWTimeoutError:
+                                pass
+                        rows = page.locator(site.list_item_selector)
+                except Exception:
+                    pass
+                continue
+
             # 본문이 자기 기관 점검인지 + 점검 주체가 남의 기관은 아닌지 확인
             not_own = bool(body_text) and not is_own_institution_notice(body_text, site.name)
             subject = external_subject(
@@ -809,9 +862,8 @@ async def _scrape_site(
                     window = future[0] if future else (windows[0] if windows else None)
                     ref = (window.end or window.start) if window else None
                     if ref and ref < datetime.now():
-                        _note_skip(skips, site, title,
-                                   f"외부 기관({subject}) 작업 안내 (이미 지난 점검)",
-                                   detail_url or "", posted_date)
+                        _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                        f"외부 기관({subject}) 작업 안내 (이미 지난 점검)")
                     else:
                         logger.info(
                             f"[{site.code}] 외부 기관({subject}) 작업 안내 → 검토 목록에 추가: {title}"
@@ -829,8 +881,7 @@ async def _scrape_site(
                 else:
                     why = (f"외부 기관({subject}) 작업 안내" if subject
                            else f"외부 기관 안내(본문에 {site.name} 미등장)")
-                    logger.info(f"[{site.code}] {why}로 판단, skip: {title}")
-                    _note_skip(skips, site, title, why, detail_url or "", posted_date)
+                    _skip_or_review(title, posted_date, detail_url or "", body_text or "", why)
                 # 목록으로 복귀 후 다음 행
                 try:
                     if page.url != list_page_url:
@@ -853,10 +904,8 @@ async def _scrape_site(
                 kw_ok, kw_why = maintenance_verdict(
                     title, keywords, reason_preview, service_preview, body_text)
                 if not kw_ok:
-                    logger.info(f"[{site.code}] 본문 기준 제외 키워드 매칭, skip: {title}")
-                    _note_skip(skips, site, title,
-                               kw_why or "본문 기준 제외 키워드 매칭",
-                               detail_url or "", posted_date)
+                    _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                    kw_why or "본문 기준 제외 키워드 매칭")
                     # 목록으로 복귀 후 다음 행
                     try:
                         if page.url != list_page_url:
@@ -876,19 +925,14 @@ async def _scrape_site(
             # (한 공지에 여러 일시가 나열되면 창마다 개별 hit — 예: 씨티은행 8/2·8/9)
             now = datetime.now()
             if not windows:
-                logger.info(f"[{site.code}] 본문에서 점검 일시 파싱 실패, skip: {title}")
-                _note_skip(skips, site, title, "점검 일시 파싱 실패",
-                           detail_url or "", posted_date)
+                _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                "점검 일시 파싱 실패")
                 continue
             future = _future_windows(windows, now)
             if not future:
                 refs = [w.end or w.start for w in windows if (w.end or w.start)]
-                logger.info(
-                    f"[{site.code}] 이미 지난 점검(또는 일시 미상), skip: {title}"
-                )
-                _note_skip(skips, site, title,
-                           (f"이미 지난 점검({max(refs):%Y-%m-%d %H:%M})" if refs else "점검 일시 미상"),
-                           detail_url or "", posted_date)
+                _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                (f"이미 지난 점검({max(refs):%Y-%m-%d %H:%M})" if refs else "점검 일시 미상"))
                 continue
 
             service_text = _resolve_service_text(title, body_text)

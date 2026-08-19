@@ -43,6 +43,8 @@ class KeywordConfig:
     external_review: List[str] = field(default_factory=list)
     # 업무 라벨 값에 있으면 제외 검사 없이 무조건 점검 공지로 판단 (예: 인터넷뱅킹)
     force_include_service: List[str] = field(default_factory=list)
+    # 제목에 이 마커가 있으면 어떤 필터에 걸려도 버리지 않고 '검토 필요'로 보낸다 (예: [중요])
+    force_review_title: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -76,6 +78,9 @@ def load_keywords(path: Path) -> KeywordConfig:
         external_review=[k.strip() for k in data.get("external_review", []) if k.strip()],
         force_include_service=[
             k.strip() for k in data.get("force_include_service", []) if k.strip()
+        ],
+        force_review_title=[
+            k.strip() for k in data.get("force_review_title", []) if k.strip()
         ],
     )
 
