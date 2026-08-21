@@ -53,11 +53,12 @@ async def run_once(headless: bool = True) -> Path:
     today_compact = run_id.split("_", 1)[0].replace("-", "")
     carried = load_previous_general(EXCEL_DIR, exclude_date=today_compact)
     # 이후 exclude 키워드가 추가된 경우(예: 제로페이/MY자산), 옛 엑셀에 남아있던
-    # 해당 공지도 함께 제외한다. 사유(reason) 텍스트가 원래 제목을 포함하므로
-    # 키워드 매칭에 사용한다.
-    from .keyword_matcher import is_maintenance
+    # 해당 공지도 함께 제외한다. 사유·업무 컬럼에 exclude 키워드가 실제로 걸릴 때만
+    # 제거 (include 유무로 판단하면 손으로 고친 사유의 행이 엉뚱하게 빠진다).
+    from .keyword_matcher import carryover_excluded
     before = len(carried)
-    carried = [c for c in carried if is_maintenance(c.reason, keywords)]
+    carried = [c for c in carried
+               if not carryover_excluded(c.reason, keywords, c.service)]
     if len(carried) != before:
         log.info(f"carryover: exclude 키워드 적용으로 {before - len(carried)}건 추가 제거")
 

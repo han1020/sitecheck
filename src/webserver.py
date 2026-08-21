@@ -40,7 +40,7 @@ from .excel_writer import (
     _NEW_FILL as _XL_NEW_FILL,
 )
 from openpyxl.styles import PatternFill
-from .keyword_matcher import is_maintenance
+from .keyword_matcher import carryover_excluded, is_maintenance
 from .scraper import (
     DEFAULT_SERVICE_TEXT, NoticeHit, make_run_id, scrape_all,
     strip_already_collected,
@@ -734,7 +734,13 @@ async def _collect() -> None:
 
     # 이전 엑셀에서 carryover (오늘 엑셀 제외 + 현행 exclude 키워드 재적용)
     carried = load_previous_general(EXCEL_DIR, exclude_date=today_compact)
-    carried = [c for c in carried if is_maintenance(c.reason, keywords)]
+    # (사유·업무 컬럼에 exclude 키워드가 실제로 걸릴 때만 제거 — 손으로 고친 사유 보호)
+    for c in carried:
+        why = carryover_excluded(c.reason, keywords, c.service)
+        if why:
+            logger.info(f"carryover 제거: {why}: {c.name} {c.schedule} | {c.reason}")
+    carried = [c for c in carried
+               if not carryover_excluded(c.reason, keywords, c.service)]
 
     def _on_progress(done: int, total: int, site_name: str) -> None:
         with _run_lock:

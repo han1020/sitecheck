@@ -76,6 +76,36 @@ def maintenance_verdict(
     return (True, "") if has_include else (False, "")
 
 
+def carryover_excluded(
+    reason: str, keywords: KeywordConfig, service: Optional[str] = None,
+) -> Optional[str]:
+    """이전 엑셀에서 이어오는(carryover) 행을 현행 exclude 규칙으로 다시 걸러야 하는지.
+
+    엑셀 행에는 제목이 없고 사유·업무 컬럼만 있으며, 사유는 사용자가 손으로 고친
+    값('네트워크 신규 장비 구성' 등)일 수 있어 include 키워드가 없는 게 정상이다.
+    그래서 is_maintenance() 처럼 include 유무로 판단하면 안 되고, exclude 류 키워드가
+    실제로 매칭될 때만 제거한다. (2026-08-21: 저축은행중앙회 행이 include 미스로
+    탈락 → 재감지되어 노란색 신규로 되살아나며 수정분을 잃던 문제)
+
+    반환: 걸린 키워드 설명 문자열, 안 걸리면 None.
+    """
+    r = normalize(reason)
+    s = normalize(service) if service else ""
+    if not r and not s:
+        return None
+    # 사유 컬럼은 원래 제목(또는 제목에서 정제한 값)일 수 있으므로 제목 전용 키워드도 본다
+    for ex in keywords.exclude_title:
+        if r and normalize(ex) in r:
+            return f"제외 키워드 '{ex}' (제목 전용, 사유 컬럼)"
+    for ex in keywords.exclude:
+        ex_n = normalize(ex)
+        if r and ex_n in r:
+            return f"제외 키워드 '{ex}' (사유 컬럼)"
+        if s and ex_n in s:
+            return f"제외 키워드 '{ex}' (업무 컬럼)"
+    return None
+
+
 def title_forces_review(title: str, keywords: KeywordConfig) -> bool:
     """제목에 강제 검토 마커([중요] 등)가 있는지 (keywords.yaml force_review_title).
 
