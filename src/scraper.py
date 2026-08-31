@@ -285,6 +285,10 @@ _LABELISH_VALUE_RE = re.compile(
 # 예: 부산은행 표 헤더 '중단업무' 다음 줄이 '00:30 ~' (시간 컬럼 셀)
 _NUMERICISH_VALUE_RE = re.compile(r"^[\d\s:~∼\-‐–—.,()시분간]+$")
 
+# 웹접근성용 표 요약 캡션 — 라벨 다음 줄로 등장해 값으로 오인되는 케이스.
+# 예: 삼성증권 '중단 업무' 다음 줄 '이 표는 휴일 거래 일시 중단 관련하여 … 설명하고 있습니다'
+_TABLE_CAPTION_RE = re.compile(r"^이\s*표는\s")
+
 # 본문 서술에서 사유 추출: 'X 작업/점검으로 (인해)' / 'X 점검에 따라' 패턴.
 # 라벨('중단 사유:' 등)이 없는 공지의 폴백 (예: 부산은행 '전산시스템 교체작업으로 …').
 _PROSE_REASON_RE = re.compile(
@@ -332,6 +336,8 @@ SERVICE_OVERRIDES: list[tuple[str, str]] = [
     ("signkorea", "일부 인증시스템 중단"),
     # 홈택스 메인 배너 — 본문(배너 대체텍스트)에 업무 라벨이 없어 은행용 기본값으로 떨어짐
     ("홈택스 서비스 일시 지연", "홈택스·손택스 전체 서비스 지연"),
+    # 삼성증권 정기 휴일 점검 — '중단 업무' 라벨 다음이 표 캡션이라 라벨 추출 실패
+    ("휴일 거래 일시 중단", "휴일 입출금 거래 중단"),
 ]
 
 
@@ -436,6 +442,11 @@ def _label_value(text: str, labels: list[str], max_len: int = 200,
                 for nxt_i in range(i + 1, len(cleaned)):
                     nxt = cleaned[nxt_i]
                     if nxt:
+                        # 웹접근성 표 캡션이 나오면 표 레이아웃 공지 — 이후 줄은
+                        # 표 셀(첫 셀만 잡혀 오인)이라 라벨 추출을 포기하고
+                        # 오버라이드/기본값 폴백에 맡긴다 (예: 삼성증권 휴일 점검)
+                        if _TABLE_CAPTION_RE.match(nxt):
+                            return ""
                         val = _strip_bullet(nxt.rstrip("."))
                         # 다음 줄이 또 다른 라벨이거나 숫자/시각 조각이면 표 헤더로
                         # 판단 (예: 농협 '내용' 헤더 → '제한일시',
