@@ -18,6 +18,8 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .. import register
 from ..base import HandlerResult
@@ -35,6 +37,19 @@ USER_AGENT = (
 
 def _new_session() -> requests.Session:
     s = requests.Session()
+    # biz.kebhana.com이 간헐적으로 응답 없이 연결을 끊음(RemoteDisconnected).
+    # 목록 POST는 조회 전용이라 재시도해도 안전.
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=frozenset(["GET", "POST"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
