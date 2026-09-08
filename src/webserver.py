@@ -174,6 +174,51 @@ def _load_run(run_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+_RUN_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}$")  # make_run_id 형식
+
+
+def delete_run(run_id: str) -> Dict[str, Any]:
+    """실행 회차 이력 삭제: run JSON + 그 회차가 남긴 스크린샷 파일.
+
+    스크린샷은 output/screenshots/<날짜>/<run_id>_*.png 로 회차 접두어가 붙어
+    있어 접두어 glob으로 지운다. 날짜 폴더가 비면 폴더도 정리한다.
+    엑셀은 날짜 단위 파일이라 여러 회차가 공유하므로 여기서 건드리지 않는다
+    (엑셀 파일 삭제는 delete_excel_file 이 별도 담당).
+    """
+    run_id = (run_id or "").strip()
+    if not _RUN_ID_RE.match(run_id):
+        return {"ok": False, "error": "잘못된 실행 ID입니다."}
+    with _run_lock:
+        if RUN_STATE.get("status") == "running":
+            return {"ok": False, "error": "수집 중에는 삭제할 수 없습니다. 잠시 후 다시 시도하세요."}
+    json_path = JSON_DIR / f"{run_id}.json"
+    if not json_path.is_file():
+        return {"ok": False, "error": "이력을 찾을 수 없습니다."}
+
+    shots = 0
+    with _json_lock:
+        try:
+            json_path.unlink()
+        except OSError as e:
+            return {"ok": False, "error": f"JSON 삭제 실패: {e}"}
+        day_dir = SCREENSHOT_DIR / run_id.split("_", 1)[0]
+        if day_dir.is_dir():
+            for f in day_dir.glob(f"{run_id}_*"):
+                if f.is_file():
+                    try:
+                        f.unlink()
+                        shots += 1
+                    except OSError:
+                        pass
+            try:  # 비었으면 날짜 폴더도 정리
+                if not any(day_dir.iterdir()):
+                    day_dir.rmdir()
+            except OSError:
+                pass
+    logger.info(f"이력 삭제: {run_id} (JSON + 스크린샷 {shots}개)")
+    return {"ok": True, "run_id": run_id, "screenshots_deleted": shots}
+
+
 def _delete_screenshot_file(screenshot_url: str) -> bool:
     """/screenshots/<상대경로> URL → 실제 파일 삭제. 삭제하면 True."""
     if not screenshot_url or not screenshot_url.startswith("/screenshots/"):
@@ -601,6 +646,27 @@ def delete_excel_row(filename: str, excel_row: int) -> Dict[str, Any]:
     return {"ok": True}
 
 
+def delete_excel_file(filename: str) -> Dict[str, Any]:
+    """엑셀 이력 파일 한 개 삭제 (output/excel/[사이트점검]_YYYYMMDD.xlsx).
+
+    주의: 다음 수집의 carryover는 '남아 있는 가장 최근 엑셀'을 기준으로 하므로,
+    최신 파일을 지우면 그 파일에만 있던 일반점검 행은 다음 엑셀로 이어지지 않는다.
+    """
+    path = _excel_path(filename)
+    if path is None:
+        return {"ok": False, "error": "파일을 찾을 수 없습니다."}
+    with _run_lock:
+        if RUN_STATE.get("status") == "running":
+            return {"ok": False, "error": "수집 중에는 삭제할 수 없습니다. 잠시 후 다시 시도하세요."}
+    with _excel_lock:
+        try:
+            path.unlink()
+        except OSError as e:
+            return {"ok": False, "error": f"삭제 실패: {e}"}
+    logger.info(f"엑셀 파일 삭제: {filename}")
+    return {"ok": True, "file": filename}
+
+
 def append_excel_row(filename: str, cells: List[Any]) -> Dict[str, Any]:
     """엑셀 '점검' 시트 맨 위(헤더 바로 아래)에 한 행 추가. 검토 탭 '공지추가' 버튼용.
 
@@ -961,6 +1027,7 @@ _INDEX_HTML = """<!DOCTYPE html>
     <label class="status">이력:
       <select id="runSelect" onchange="loadRun(this.value)"></select>
     </label>
+    <button class="del-btn" id="runDelBtn" title="선택한 회차 이력 삭제 (JSON + 스크린샷)" onclick="deleteRun()">🗑 이력 삭제</button>
     <span class="status" id="genAt"></span>
     <a id="excelLink" class="status" href="#" style="display:none">엑셀 다운로드</a>
   </div>
@@ -1076,6 +1143,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       <label class="status">엑셀 파일:
         <select id="excelSelect" onchange="loadExcel(this.value)"></select>
       </label>
+      <button class="del-btn" id="excelDelBtn" title="선택한 엑셀 파일 삭제" onclick="deleteExcelFile()">🗑 파일 삭제</button>
       <button id="saveBtn" onclick="saveExcel()" disabled>변경사항 저장</button>
       <button id="sortBtn" onclick="sortExcel()">일시·기관코드 정렬</button>
       <span class="status" id="editState"></span>
@@ -1155,7 +1223,8 @@ async function loadRuns(){
   const runs = await (await fetch('/api/runs')).json();
   const sel = document.getElementById('runSelect');
   sel.innerHTML = '';
-  if(runs.length === 0){ sel.innerHTML = '<option value="">(없음)</option>'; return; }
+  document.getElementById('runDelBtn').disabled = (runs.length === 0);
+  if(runs.length === 0){ sel.innerHTML = '<option value="">(없음)</option>'; clearRunView(); return; }
   for(const r of runs){
     const o = document.createElement('option');
     o.value = r.run_id;
@@ -1520,6 +1589,37 @@ async function saveRegular(){
   }
 }
 
+function clearRunView(){
+  curRunId = ''; curMatched = []; curReview = []; curSkipped = []; curExcelName = '';
+  for(const id of ['cMatched','cReview','cSkipped','cErrors']) document.getElementById(id).textContent = '0';
+  document.getElementById('genAt').textContent = '';
+  document.getElementById('excelLink').style.display = 'none';
+  document.getElementById('errBox').style.display = 'none';
+  document.getElementById('reviewBadge').style.display = 'none';
+  document.getElementById('rows').innerHTML = '<tr><td colspan="10" class="muted">저장된 이력이 없습니다.</td></tr>';
+  document.getElementById('reviewRows').innerHTML = '<tr><td colspan="8" class="muted">검토할 항목이 없습니다.</td></tr>';
+  buildSkipFilter();
+  renderSkips();
+}
+
+async function deleteRun(){
+  const sel = document.getElementById('runSelect');
+  const runId = sel.value;
+  if(!runId) return;
+  if(!confirm(`이력 ${runId} 을(를) 삭제할까요?\\n\\nrun JSON과 이 회차의 스크린샷 파일이 함께 삭제됩니다.\\n엑셀 파일은 유지됩니다 (엑셀뷰 탭에서 별도 삭제).`)) return;
+  const btn = document.getElementById('runDelBtn');
+  btn.disabled = true;
+  const r = await fetch('/api/run/delete', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({run_id: runId}),
+  });
+  const res = await r.json();
+  btn.disabled = false;
+  if(!res.ok){ alert('삭제 실패: ' + (res.error || '')); return; }
+  await loadRuns();
+  if(sel.value) loadRun(sel.value);
+}
+
 async function deleteMatched(i, btn){
   if(!confirm('이 감지 항목을 삭제할까요?\\n\\n캡처 스크린샷과 엑셀의 해당 행도 함께 삭제되고,\\n앞으로의 수집에서도 다시 올라오지 않습니다.')) return;
   btn.disabled = true;
@@ -1637,6 +1737,11 @@ async function loadExcels(){
   if(list.length === 0){
     sel.innerHTML = '<option value="">(없음)</option>';
     document.getElementById('excelRows').innerHTML = '<tr><td class="muted">생성된 엑셀이 없습니다.</td></tr>';
+    document.getElementById('excelHead').innerHTML = '';
+    document.getElementById('excelMeta').textContent = '';
+    document.getElementById('excelDl').style.display = 'none';
+    document.getElementById('excelDelBtn').disabled = true;
+    document.getElementById('saveBtn').disabled = true;
     return;
   }
   for(const it of list){
@@ -1645,6 +1750,7 @@ async function loadExcels(){
     o.textContent = `${it.date}  (${it.filename})`;
     sel.appendChild(o);
   }
+  document.getElementById('excelDelBtn').disabled = false;
   sel.value = (prev && list.some(x => x.filename === prev)) ? prev : list[0].filename;
   loadExcel(sel.value);
 }
@@ -1738,6 +1844,25 @@ async function sortExcel(){
   } else {
     setEditState('정렬 실패: ' + (res.error || ''), '#dc2626');
   }
+}
+
+async function deleteExcelFile(){
+  const sel = document.getElementById('excelSelect');
+  const file = sel.value;
+  if(!file) return;
+  if(!confirm(`엑셀 파일 ${file} 을(를) 삭제할까요?\\n\\n되돌릴 수 없습니다. 다음 수집의 carryover(이전 일반점검 행 이어받기)는 남아 있는 가장 최근 엑셀을 기준으로 합니다.`)) return;
+  const btn = document.getElementById('excelDelBtn');
+  btn.disabled = true;
+  const r = await fetch('/api/excel/delete_file', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({file}),
+  });
+  const res = await r.json();
+  btn.disabled = false;
+  if(!res.ok){ setEditState('삭제 실패: ' + (res.error || ''), '#dc2626'); return; }
+  curExcelFile = '';
+  setEditState(`${file} 삭제됨`, '#16a34a');
+  await loadExcels();
 }
 
 async function deleteRow(excelRow, btn){
@@ -1885,6 +2010,14 @@ class Handler(BaseHTTPRequestHandler):
             # 주의: `or -1` 폴백은 index=0(falsy)까지 -1로 만든다 — 명시적 None 체크
             idx = body.get("index")
             res = delete_matched_hit(body.get("run_id", ""), int(idx) if idx is not None else -1)
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/run/delete":
+            body = self._read_body()
+            res = delete_run(body.get("run_id", ""))
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/excel/delete_file":
+            body = self._read_body()
+            res = delete_excel_file(body.get("file", ""))
             self._send_json(res, 200 if res.get("ok") else 400); return
         if parsed.path == "/api/review/skip":
             body = self._read_body()
