@@ -380,6 +380,7 @@ def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 _KW_SECTIONS = [
     ("include", "포함 키워드", "제목에 이 중 하나라도 있으면 점검 공지로 간주"),
+    ("include_review", "검토 전용 키워드", "포함 키워드 없이 이 단어만 제목에 있으면 감지목록 대신 '검토 필요' 탭으로 (예: '적용')"),
     ("exclude", "제외 키워드 (제목+라벨)", "제목 또는 사유·업무 라벨 값에 이 단어가 있으면 제외 — 외부기관 안내 등"),
     ("exclude_title", "제외 키워드 (제목 전용)", "제목에서만 매칭 — 라벨 값에 정상 등장할 수 있는 단어용"),
     ("exclude_body", "제외 키워드 (본문)", "본문 전체에서 매칭하는 제외 키워드 (오탐 위험 큰 특이 문구만)"),
@@ -388,7 +389,7 @@ _KW_SECTIONS = [
 ]
 
 _KW_HEAD_RE = re.compile(
-    r"^(include|exclude_title|exclude_body|exclude|external_orgs|institution_aliases):"
+    r"^(include_review|include|exclude_title|exclude_body|exclude|external_orgs|institution_aliases):"
     r"\s*(?:#.*)?$"
 )
 
@@ -410,13 +411,17 @@ def parse_keywords_raw() -> Dict[str, Any]:
         if head:
             cur = head.group(1)
             continue
+        if _KW_TOP_KEY_RE.match(line):
+            # 표시하지 않는 섹션(force_include_service 등) 시작 — 이전 섹션에 항목이 새지 않게
+            cur = None
+            continue
         item = re.match(r"^\s*-\s*(.+)$", line)
         if item and cur:
             body = item.group(1)
             keyword, note = body, ""
             if "#" in body:
                 keyword, note = body.split("#", 1)
-            keyword, note = keyword.strip(), note.strip()
+            keyword, note = _kw_unquote(keyword), note.strip()
             if keyword:
                 buckets[cur].append({"keyword": keyword, "note": note})
     sections = [
@@ -424,6 +429,169 @@ def parse_keywords_raw() -> Dict[str, Any]:
         for k, title, hint in _KW_SECTIONS
     ]
     return {"sections": sections, "path": "config/keywords.yaml"}
+
+
+_kw_lock = threading.Lock()
+_KW_EDITABLE = {k for k, _, _ in _KW_SECTIONS}
+_KW_TOP_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*:")
+
+
+def _kw_yaml_scalar(keyword: str) -> str:
+    """키워드를 YAML 항목 값으로 안전하게 표기 ('[중요]'처럼 특수문자면 따옴표)."""
+    import yaml
+    dumped = yaml.safe_dump(keyword, allow_unicode=True).splitlines()
+    return dumped[0].strip() if dumped else keyword
+
+
+def _kw_unquote(raw: str) -> str:
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        return raw[1:-1]
+    return raw
+
+
+def _kw_section_span(lines: List[str], section: str) -> tuple[int, int]:
+    """섹션 헤더 줄 번호와 섹션 끝(다음 최상위 키 또는 EOF) 줄 번호. 헤더 없으면 (-1, -1)."""
+    start = -1
+    for i, line in enumerate(lines):
+        head = _KW_HEAD_RE.match(line)
+        if head and head.group(1) == section:
+            start = i
+            break
+    if start < 0:
+        return -1, -1
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _KW_TOP_KEY_RE.match(lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def _kw_is_continuation_comment(line: str) -> bool:
+    """항목 아래 이어지는 주석 줄(항목보다 깊게 들여쓴 '#' 줄)인지."""
+    stripped = line.lstrip()
+    return stripped.startswith("#") and (len(line) - len(stripped)) > 4
+
+
+def _kw_validate_and_write(path: Path, original: str, new_text: str,
+                           section: str, keyword: str, expect_present: bool) -> Optional[str]:
+    """새 내용을 YAML로 재파싱해 검증한 뒤 저장. 실패 시 오류 문자열(파일은 건드리지 않음)."""
+    import yaml
+    try:
+        data = yaml.safe_load(new_text) or {}
+    except Exception as e:  # noqa: BLE001
+        return f"YAML 검증 실패: {e}"
+    items = [str(x).strip().lower() for x in (data.get(section) or [])]
+    present = keyword.strip().lower() in items
+    if present != expect_present:
+        return "저장 결과 검증 실패 — 파일을 직접 확인하세요."
+    path.write_text(new_text, encoding="utf-8")
+    return None
+
+
+def add_keyword(section: str, keyword: str, note: str = "") -> Dict[str, Any]:
+    """keywords.yaml 의 지정 섹션 끝에 키워드 한 줄 추가 (기존 주석·순서 보존).
+
+    다음 수집부터 반영된다 (수집은 시작 시 keywords.yaml 을 읽는다).
+    """
+    if section not in _KW_EDITABLE:
+        return {"ok": False, "error": "편집할 수 없는 섹션입니다."}
+    keyword = " ".join((keyword or "").split())
+    note = " ".join((note or "").replace("#", "").split())
+    if not keyword:
+        return {"ok": False, "error": "키워드를 입력하세요."}
+    if len(keyword) > 60:
+        return {"ok": False, "error": "키워드가 너무 깁니다 (60자 이내)."}
+    path = CONFIG_DIR / "keywords.yaml"
+    with _kw_lock:
+        try:
+            original = path.read_text(encoding="utf-8")
+        except OSError:
+            return {"ok": False, "error": "keywords.yaml 을 읽을 수 없습니다."}
+        lines = original.splitlines()
+        start, end = _kw_section_span(lines, section)
+        if start < 0:
+            return {"ok": False, "error": f"'{section}' 섹션을 찾을 수 없습니다."}
+        existing = {it["keyword"].strip().lower() for it in parse_keywords_raw_section(lines, section)}
+        if keyword.lower() in existing:
+            return {"ok": False, "error": f"'{keyword}'는 이미 등록되어 있습니다."}
+        # 마지막 항목(+그 아래 이어지는 주석) 뒤에 삽입. 항목이 없으면 헤더 바로 아래.
+        insert_at = start + 1
+        for j in range(start + 1, end):
+            if re.match(r"^\s*-\s", lines[j]):
+                insert_at = j + 1
+                while insert_at < end and _kw_is_continuation_comment(lines[insert_at]):
+                    insert_at += 1
+        today = datetime.now().strftime("%Y-%m-%d")
+        note_txt = f"{note} " if note else ""
+        new_line = f"  - {_kw_yaml_scalar(keyword):<18}# {note_txt}(대시보드에서 추가 {today})"
+        lines.insert(insert_at, new_line)
+        new_text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+        err = _kw_validate_and_write(path, original, new_text, section, keyword, True)
+        if err:
+            return {"ok": False, "error": err}
+    logger.info(f"키워드 추가: {section} += '{keyword}' ({note})")
+    return {"ok": True, "section": section, "keyword": keyword}
+
+
+def remove_keyword(section: str, keyword: str) -> Dict[str, Any]:
+    """keywords.yaml 의 지정 섹션에서 키워드 한 줄(+이어지는 주석) 삭제."""
+    if section not in _KW_EDITABLE:
+        return {"ok": False, "error": "편집할 수 없는 섹션입니다."}
+    keyword = (keyword or "").strip()
+    if not keyword:
+        return {"ok": False, "error": "키워드가 비어 있습니다."}
+    path = CONFIG_DIR / "keywords.yaml"
+    with _kw_lock:
+        try:
+            original = path.read_text(encoding="utf-8")
+        except OSError:
+            return {"ok": False, "error": "keywords.yaml 을 읽을 수 없습니다."}
+        lines = original.splitlines()
+        start, end = _kw_section_span(lines, section)
+        if start < 0:
+            return {"ok": False, "error": f"'{section}' 섹션을 찾을 수 없습니다."}
+        target = -1
+        for j in range(start + 1, end):
+            item = re.match(r"^\s*-\s*(.+)$", lines[j])
+            if not item:
+                continue
+            body = item.group(1)
+            raw_kw = body.split("#", 1)[0] if "#" in body else body
+            if _kw_unquote(raw_kw).lower() == keyword.lower():
+                target = j
+                break
+        if target < 0:
+            return {"ok": False, "error": f"'{keyword}'를 찾을 수 없습니다. 목록을 새로고침하세요."}
+        stop = target + 1
+        while stop < end and _kw_is_continuation_comment(lines[stop]):
+            stop += 1
+        del lines[target:stop]
+        new_text = "\n".join(lines) + ("\n" if original.endswith("\n") else "")
+        err = _kw_validate_and_write(path, original, new_text, section, keyword, False)
+        if err:
+            return {"ok": False, "error": err}
+    logger.info(f"키워드 삭제: {section} -= '{keyword}'")
+    return {"ok": True, "section": section, "keyword": keyword}
+
+
+def parse_keywords_raw_section(lines: List[str], section: str) -> List[Dict[str, str]]:
+    """parse_keywords_raw 와 같은 규칙으로 한 섹션의 [{keyword, note}] 만 뽑는다."""
+    start, end = _kw_section_span(lines, section)
+    out: List[Dict[str, str]] = []
+    if start < 0:
+        return out
+    for line in lines[start + 1:end]:
+        item = re.match(r"^\s*-\s*(.+)$", line)
+        if not item:
+            continue
+        body = item.group(1)
+        keyword, note = (body.split("#", 1) if "#" in body else (body, ""))
+        keyword = _kw_unquote(keyword)
+        if keyword:
+            out.append({"keyword": keyword, "note": note.strip()})
+    return out
 
 
 def regular_baseline() -> Dict[str, Any]:
@@ -1014,6 +1182,15 @@ _INDEX_HTML = """<!DOCTYPE html>
   .kw-chip .note { color: #94a3b8; margin-left: 7px; font-size: 11px; max-width: 340px; overflow: hidden;
                    text-overflow: ellipsis; white-space: nowrap; }
   .kw-sec.exclude .kw-chip .note { color: #c07a7a; }
+  .kw-chip .x { margin-left: 6px; border: 0; background: transparent; color: #94a3b8; cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 0 2px; }
+  .kw-chip .x:hover { color: #dc2626; }
+  .kw-add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .kw-add input { border: 1px solid #d1d5db; border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  .kw-add input.kw { width: 180px; } .kw-add input.memo { flex: 1; min-width: 200px; }
+  .kw-add button { border: 1px solid #d1d5db; background: #f8fafc; border-radius: 6px; padding: 5px 12px;
+    font-size: 13px; cursor: pointer; }
+  .kw-add button:hover { background: #eef2ff; }
 </style>
 </head>
 <body>
@@ -1166,7 +1343,8 @@ _INDEX_HTML = """<!DOCTYPE html>
     <h2>키워드 설정 <span class="status" id="kwPath"></span></h2>
     <div class="legend">
       수집 시 제목/본문에 아래 키워드가 매칭되는지로 점검 공지를 판별합니다.
-      수정하려면 <code>config/keywords.yaml</code> 파일을 편집한 뒤 다시 수집하세요.
+      각 섹션 아래 입력 칸으로 추가, 칩의 ×로 삭제하면 <code>config/keywords.yaml</code>에 바로 저장되며
+      <b>다음 수집부터</b> 적용됩니다 (이미 수집된 결과는 '지금 수집'으로 다시 돌려야 반영).
     </div>
     <div id="kwSections"></div>
   </div>
@@ -1715,7 +1893,8 @@ async function loadKeywords(){
   if(d.error){ wrap.innerHTML = `<div class="err-box">${esc(d.error)}</div>`; return; }
   wrap.innerHTML = (d.sections || []).map(sec => {
     const chips = (sec.items || []).map(it =>
-      `<span class="kw-chip">${esc(it.keyword)}${it.note ? `<span class="note" title="${esc(it.note)}">${esc(it.note)}</span>` : ''}</span>`
+      `<span class="kw-chip">${esc(it.keyword)}${it.note ? `<span class="note" title="${esc(it.note)}">${esc(it.note)}</span>` : ''}` +
+      `<button class="x" title="삭제" onclick="removeKeyword('${esc(sec.key)}', this.dataset.kw)" data-kw="${esc(it.keyword)}">×</button></span>`
     ).join('');
     const body = (sec.items && sec.items.length)
       ? `<div class="kw-list">${chips}</div>`
@@ -1724,8 +1903,32 @@ async function loadKeywords(){
       <h3>${esc(sec.title)} <span class="cnt">${(sec.items||[]).length}개</span></h3>
       <div class="hint">${esc(sec.hint)}</div>
       ${body}
+      <div class="kw-add">
+        <input class="kw" placeholder="키워드" onkeydown="if(event.key==='Enter') addKeyword('${esc(sec.key)}', this)">
+        <input class="memo" placeholder="메모 (선택 — 예: 어느 기관 어떤 공지)" onkeydown="if(event.key==='Enter') addKeyword('${esc(sec.key)}', this)">
+        <button onclick="addKeyword('${esc(sec.key)}', this)">추가</button>
+      </div>
     </div>`;
   }).join('');
+}
+
+async function addKeyword(section, el){
+  const row = el.closest('.kw-add');
+  const kw = row.querySelector('input.kw').value.trim();
+  const note = row.querySelector('input.memo').value.trim();
+  if(!kw){ alert('키워드를 입력하세요.'); return; }
+  const r = await (await fetch('/api/keywords/add', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({section, keyword: kw, note})})).json();
+  if(!r.ok){ alert(r.error || '추가 실패'); return; }
+  await loadKeywords();
+}
+
+async function removeKeyword(section, kw){
+  if(!confirm(`'${kw}' 키워드를 삭제할까요?\nkeywords.yaml에서 바로 지워지며 다음 수집부터 적용됩니다.`)) return;
+  const r = await (await fetch('/api/keywords/remove', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({section, keyword: kw})})).json();
+  if(!r.ok){ alert(r.error || '삭제 실패'); return; }
+  await loadKeywords();
 }
 
 // ---- 엑셀뷰 ----
@@ -2043,6 +2246,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/regular/update":
             body = self._read_body()
             res = update_regular(body.get("items") or [])
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/keywords/add":
+            body = self._read_body()
+            res = add_keyword(str(body.get("section", "")), str(body.get("keyword", "")),
+                              str(body.get("note", "")))
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/keywords/remove":
+            body = self._read_body()
+            res = remove_keyword(str(body.get("section", "")), str(body.get("keyword", "")))
             self._send_json(res, 200 if res.get("ok") else 400); return
         self.send_error(404)
 

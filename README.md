@@ -74,7 +74,7 @@ python serve.py --host 0.0.0.0 --port 8000   # 사내망 등 외부 접속 허�
   - 파일 선택 옆 **🗑 파일 삭제**: 선택한 엑셀 파일 자체를 삭제. 다음 수집의 carryover는 남아 있는 가장 최근 엑셀을 기준으로 하므로 최신 파일을 지우면 그 파일에만 있던 일반점검 행은 이어지지 않습니다.
   - 수집이 진행 중(`status: running`)일 때는 편집/삭제가 거부됩니다(파일 충돌 방지).
 - **정기점검 탭**: `config/regular_maintenance.yaml`의 baseline을 표로 표시하고 **바로 편집** 가능 (셀 편집·행 추가/삭제 → 저장 시 YAML 재작성, 재파싱 검증 포함). 엑셀에는 다음 수집부터 반영.
-- **제외 키워드 탭**: `keywords.yaml`의 6개 섹션(include / exclude / exclude_title / exclude_body / external_orgs / institution_aliases)을 인라인 주석과 함께 조회 (읽기 전용).
+- **제외 키워드 탭**: `keywords.yaml`의 7개 섹션(include / include_review / exclude / exclude_title / exclude_body / external_orgs / institution_aliases)을 인라인 주석과 함께 표시하고 **바로 편집** 가능. 섹션마다 입력 칸(키워드 + 메모)으로 추가, 칩의 ×로 삭제하면 YAML에 즉시 저장(기존 주석·순서 보존, 재파싱 검증). 수집은 시작 시 파일을 읽으므로 **다음 수집부터 적용** — 바로 반영하려면 '지금 수집'.
 
 수집 결과는 `output/json/`에 회차별 JSON으로도 저장되어 감지 목록·스킵 히스토리로 쌓입니다.
 
@@ -132,6 +132,8 @@ include:    # 제목에 하나라도 포함되면 점검 후보
   - 서비스 일시중단
   - 시스템 작업
   - ...
+include_review:   # include 없이 이 단어만 제목에 있으면 감지목록이 아니라 '검토 필요' 탭으로
+  - 적용          # 예: '인터넷등기소 캡챠이미지 적용 안내' — 중단 공지인지 단순 변경인지 사람이 판단
 force_include_service:   # 업무 '라벨 값'에 있으면 어떤 제외 검사와도 무관하게 무조건 점검 공지
   - 인터넷뱅킹           # 핵심 채널이 영향 업무에 명시되면 놓치지 않는다
 exclude:    # 제목 또는 사유·업무 '라벨 값'에 있으면 제외
@@ -157,6 +159,8 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 > exclude는 `(제목 → False)` 뿐 아니라 carryover로 들어오는 옛 엑셀 항목에도 동일하게 적용됩니다. 새 키워드를 추가하면 다음 실행부터 옛 잔재도 함께 빠집니다.
 >
 > 어느 계층에 넣을지 판단: 그 단어가 **정상 점검 공지의 업무/사유 라벨 값에 등장할 수 있으면 `exclude_title`**, 제목·라벨에 안 나오고 본문 서술에만 나오면 `exclude_body`, 외부 기관명이면 `external_orgs`(또는 표기 변형이면 `institution_aliases`).
+>
+> `include_review`는 "놓치면 안 되지만 점검이라고 확신할 수 없는" 단어용입니다. 이 단어에만 걸린 공지는 exclude 검사만 거친 뒤 외부기관·자기기관·일시 검사 없이 **'검토 필요' 탭**으로 가고, 본문에서 일시·업무를 뽑을 수 있으면 함께 표시됩니다. 등록일 60일 초과 옛 공지와 본문 일시가 이미 지난 공지는 스킵 탭에 기록됩니다. 제목에 `include` 키워드('점검' 등)도 함께 있으면 일반 감지 흐름을 따릅니다.
 
 ### `config/regular_maintenance.yaml`
 사이트별 **정기점검 baseline**. 스크래핑 결과와 무관하게 엑셀에 항상 포함됩니다. 정기점검 일정이 바뀌면 이 파일을 수정하거나 **웹 대시보드 '정기점검' 탭에서 직접 편집**하세요 (다음 수집부터 반영).
@@ -380,6 +384,26 @@ logs/
 - (Docker) 수집이 돌다가 결과 없이 끝나고 `output/json`이 빔 → 컨테이너가 도중에 죽고 `restart` 정책으로 조용히 재시작된 것. `sudo docker inspect sitecheck-web --format '{{.RestartCount}}'`가 0보다 크면 확정. `dmesg`에 `invalid opcode ... libtorch_cpu.so`가 있으면 CPU가 AVX2 미지원인 경우로, 기본값(OCR 비양자화)에서는 발생하지 않아야 하나 `SITECHECK_OCR_QUANTIZE=1`을 켰다면 끄세요.
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
+## 최근 변경 (2026-09)
+
+### 검토 전용 감지 키워드 `include_review` 신설 (2026-09-08)
+
+- **배경**: '인터넷등기소 캡챠이미지 적용 안내'처럼 제목에 '적용'만 있는 공지는 서비스 중단을 동반할 수 있는데 include 키워드가 없어 무기록 탈락했다. 그러나 '적용'은 금리·수수료·약관 변경 안내에도 흔해 그대로 include에 넣으면 감지목록이 오탐으로 채워진다.
+- **`keywords.yaml` `include_review` 섹션**: 이 단어에만 걸린 제목은 점검 후보로 잡되 감지목록으로 올리지 않고 **'검토 필요' 탭**으로 보낸다(사유 컬럼에 `검토 전용 키워드 '적용' — 점검 여부 확인 필요`). 초기값 `적용`.
+- **판정 흐름**: exclude/exclude_title/exclude_body 검사는 그대로 적용(걸리면 스킵 탭에 사유 기록) → 외부기관·자기기관·일시 검사는 건너뛰고 검토로. 본문에서 일시·업무를 뽑을 수 있으면 검토 탭 제목 아래에 함께 표시. 등록일 60일 초과 옛 공지, 본문 일시가 이미 지난 공지는 스킵 탭. 본문이 비어(이미지 공지) OCR로 일시를 읽어도 감지목록으로 승격하지 않고 캡처와 함께 검토로만 남긴다. 제목에 include 키워드('점검' 등)가 함께 있으면 일반 감지 흐름.
+- **구현**: `keyword_matcher.review_only_keyword()`(include 미매칭 + include_review 매칭 시 키워드 반환), `maintenance_verdict()`는 include_review도 후보로 인식, `scraper._route_review_only()`가 핸들러·Playwright 두 경로에서 공용으로 검토 hit/스킵 사유를 만든다. 대시보드 '제외 키워드' 탭에 '검토 전용 키워드' 섹션 추가.
+
+### 키워드 탭 인라인 편집 (2026-09-08)
+
+- **입력 칸으로 키워드 추가 / 칩 ×로 삭제**: 대시보드 '제외 키워드' 탭이 읽기 전용에서 편집 가능으로. `POST /api/keywords/add {section, keyword, note}` → 해당 섹션의 마지막 항목(과 그 아래 이어지는 주석) 뒤에 `  - 키워드  # 메모 (대시보드에서 추가 YYYY-MM-DD)` 한 줄 삽입. `POST /api/keywords/remove {section, keyword}` → 그 항목 줄과 이어지는 들여쓴 주석 줄을 함께 삭제. 둘 다 텍스트 단위 편집이라 기존 주석·순서가 그대로 남고, 저장 전 YAML 재파싱으로 키워드 존재 여부를 검증(실패 시 파일 미변경). `[중요]`처럼 YAML 특수문자가 든 키워드는 자동으로 따옴표 처리, 중복(대소문자·공백 무시)은 거부.
+- **섹션 누수 표시 버그 수정**: 탭에 표시하지 않는 `force_include_service`·`force_review_title`·`external_review` 항목이 헤더로 인식되지 않아 앞 섹션(`exclude_body`)에 8개로 잘못 묶여 보이던 문제. 최상위 키를 만나면 섹션을 끊도록 수정.
+- **적용 시점**: 수집(`main.run`)은 시작 시 `keywords.yaml`을 읽으므로 편집 내용은 **다음 수집부터** 반영된다. 이미 수집된 회차의 판정은 바뀌지 않으니 '지금 수집'으로 다시 돌리면 된다. 편집 가능 섹션은 탭에 표시되는 7개(`force_include_service`·`force_review_title`·`external_review`는 파일에서 편집).
+
+### 이력 삭제 기능 (2026-09-08)
+
+- **감지 목록 '🗑 이력 삭제'**: `POST /api/run/delete {run_id}` → `output/json/<run_id>.json` + `output/screenshots/<날짜>/<run_id>_*.png` 삭제(날짜 폴더가 비면 폴더도 정리). run_id는 `YYYY-MM-DD_HHMM` 형식만 허용(경로 탈출 방지). 엑셀은 날짜 단위로 여러 회차가 공유하므로 건드리지 않음.
+- **엑셀뷰 '🗑 파일 삭제'**: `POST /api/excel/delete_file {file}` → `output/excel/[사이트점검]_YYYYMMDD.xlsx` 삭제(`_excel_path` 검증). 둘 다 수집 진행 중(`running`)에는 거부.
+
 ## 최근 변경 (2026-08)
 
 ### NH저축은행 SPA 개편 대응 (2026-08-11)
@@ -419,11 +443,6 @@ logs/
   - wqAction API는 요청 본문 끝에 `<nts<nts>nts>`+토큰이 필수 → 페이지가 자연 발생시킨 요청에서 토큰을 채집해 상세 조회(`ATXPPBAA001R02`)에 재사용. 배너 조회(`ATXPPCBA001R11`)는 화면(screenId) 불일치 시 토큰이 거부돼 fetch 재현 대신 자연 발생 응답을 캡처.
   - `sites.yaml`: KRNT `enabled: true`, 본문이 "홈택스"로만 표기돼 `aliases: [홈택스]` 등록.
   - 검증: 실공지 "홈택스 서비스 일시 중단 안내" 기준 키워드 매칭 → 자기기관 검증 → 일시 파싱(`○ 일시 : 7.1.(수) 00:00 ~ 9:00` → 2026-07-01 00:00~09:00, 기존 파서 무수정) 전 단계 통과 확인. 당시 종료 시각이 과거라 '이미 지난 점검' 스킵 처리된 것까지 확인 (정상 판정).
-
-### 이력 삭제 기능 (2026-09-08)
-
-- **감지 목록 '🗑 이력 삭제'**: `POST /api/run/delete {run_id}` → `output/json/<run_id>.json` + `output/screenshots/<날짜>/<run_id>_*.png` 삭제(날짜 폴더가 비면 폴더도 정리). run_id는 `YYYY-MM-DD_HHMM` 형식만 허용(경로 탈출 방지). 엑셀은 날짜 단위로 여러 회차가 공유하므로 건드리지 않음.
-- **엑셀뷰 '🗑 파일 삭제'**: `POST /api/excel/delete_file {file}` → `output/excel/[사이트점검]_YYYYMMDD.xlsx` 삭제(`_excel_path` 검증). 둘 다 수집 진행 중(`running`)에는 거부.
 
 ### 대시보드 개편 (2026-07-14)
 
