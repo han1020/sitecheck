@@ -28,6 +28,9 @@ class SiteConfig:
 @dataclass
 class KeywordConfig:
     include: List[str] = field(default_factory=list)
+    # 검토 전용 감지 키워드. include 없이 이 단어만 제목에 있으면 감지목록이 아니라
+    # '검토 필요'로 보낸다 (예: '적용' — 서비스 변경 공지인지 중단 공지인지 불명확)
+    include_review: List[str] = field(default_factory=list)
     exclude: List[str] = field(default_factory=list)
     # 제목에서만 매칭하는 제외 키워드. 업무/사유 라벨 '값'에 정상적으로 등장할 수
     # 있는 단어(예: 'CD공동망')를 exclude에 두면 공지 전체가 잘못 빠진다.
@@ -68,6 +71,7 @@ def load_keywords(path: Path) -> KeywordConfig:
         data = yaml.safe_load(f) or {}
     return KeywordConfig(
         include=[k.strip() for k in data.get("include", []) if k.strip()],
+        include_review=[k.strip() for k in data.get("include_review", []) if k.strip()],
         exclude=[k.strip() for k in data.get("exclude", []) if k.strip()],
         exclude_title=[k.strip() for k in data.get("exclude_title", []) if k.strip()],
         exclude_body=[k.strip() for k in data.get("exclude_body", []) if k.strip()],

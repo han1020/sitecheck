@@ -27,6 +27,8 @@ def maintenance_verdict(
     - force_include_service 키워드: 업무(service) 라벨 값에 있으면 include/exclude
         검사와 무관하게 무조건 True (예: '인터넷뱅킹' — 핵심 채널 영향 공지는 놓치지 않는다)
     - include 키워드: 제목에 하나라도 포함되어야 True
+    - include_review 키워드(예: '적용'): include 와 같이 후보로 잡지만, 이 단어만 걸린
+        공지는 호출측에서 review_only_keyword() 로 구분해 '검토 필요'로 보낸다
     - exclude_title 키워드: 제목에만 매칭. 라벨 값에 정상적으로 등장할 수 있는
         단어용 (예: 'CD공동망'은 광주은행 업무 값 '전자금융공동망, CD공동망 …'에
         들어가는데, exclude에 두면 그 점검 공지가 통째로 빠진다).
@@ -43,7 +45,8 @@ def maintenance_verdict(
     if not t:
         return False, ""
 
-    has_include = any(normalize(kw) in t for kw in keywords.include)
+    has_include = (any(normalize(kw) in t for kw in keywords.include)
+                   or any(normalize(kw) in t for kw in keywords.include_review))
 
     r = normalize(reason_text) if reason_text else ""
     s = normalize(service_text) if service_text else ""
@@ -104,6 +107,23 @@ def carryover_excluded(
         if s and ex_n in s:
             return f"제외 키워드 '{ex}' (업무 컬럼)"
     return None
+
+
+def review_only_keyword(title: str, keywords: KeywordConfig) -> str:
+    """제목이 '검토 전용 키워드'(keywords.yaml include_review)에만 걸렸으면 그 키워드를 반환.
+
+    일반 include 키워드('점검' 등)가 하나라도 있으면 일반 감지 흐름이므로 빈 문자열.
+    예: '인터넷등기소 캡챠이미지 적용 안내' → '적용' (점검인지 단순 변경인지 사람이 판단)
+    """
+    t = normalize(title)
+    if not t:
+        return ""
+    if any(normalize(kw) in t for kw in keywords.include):
+        return ""
+    for kw in keywords.include_review:
+        if kw and normalize(kw) in t:
+            return kw
+    return ""
 
 
 def title_forces_review(title: str, keywords: KeywordConfig) -> bool:

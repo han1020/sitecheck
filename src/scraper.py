@@ -26,7 +26,7 @@ from .handlers.base import HandlerResult
 from .keyword_matcher import (
     build_institution_roster, external_subject, is_maintenance,
     is_own_institution_notice, maintenance_verdict, normalize,
-    title_forces_review,
+    review_only_keyword, title_forces_review,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,40 @@ def _forced_review_hit(site: SiteConfig, title: str, posted_date: str,
         reason_text=f"강제 검토 마커 — {why}",
         needs_review=True, body_text=body_text or "",
     )
+
+
+def _route_review_only(site: SiteConfig, title: str, posted_date: str, detail_url: str,
+                       body_text: str, kw: str, now: datetime,
+                       screenshot_path: str = "") -> tuple[Optional["NoticeHit"], str]:
+    """검토 전용 키워드(keywords.yaml include_review, 예: '적용')에만 걸린 공지 처리.
+
+    일반 include 키워드가 없어 점검인지 단순 변경 안내인지 제목만으로 확신할 수 없으므로
+    감지목록으로 올리지 않고 '검토 필요'로 보낸다. 외부기관·자기기관 검사는 건너뛴다
+    (사람이 판단). 본문에서 일시·업무를 뽑을 수 있으면 함께 실어 판단을 돕는다.
+
+    반환: (검토 hit, 스킵 사유). 등록일이 60일 넘었거나 본문 일시가 이미 지났으면
+    hit 대신 스킵 사유를 돌려준다 (호출측이 _skip_or_review 로 처리).
+    """
+    why = f"검토 전용 키워드 '{kw}'"
+    if _posted_too_old(posted_date):
+        return None, f"{why} + 등록일 오래됨({posted_date})"
+    windows = extract_windows(body_text) if body_text else []
+    future = _future_windows(windows, now)
+    window = future[0] if future else (windows[0] if windows else None)
+    ref = (window.end or window.start) if window else None
+    if ref and ref < now:
+        return None, f"이미 지난 일시({ref:%Y-%m-%d %H:%M}) — {why}"
+    hit = NoticeHit(
+        site_code=site.code, site_name=site.name, category=site.category,
+        title=title, posted_date=posted_date, detail_url=detail_url,
+        screenshot_path=screenshot_path,
+        window=window,
+        schedule_text=(format_schedule(window) or window.raw) if window else "",
+        service_text=_label_value(body_text, _SERVICE_LABELS, collect_bullets=True) or "",
+        reason_text=f"{why} — 점검 여부 확인 필요",
+        needs_review=True, body_text=body_text or "",
+    )
+    return hit, ""
 
 
 _REVIEW_MAX_AGE_DAYS = 60  # 검토 대상: 등록일이 이보다 오래되면 옛 공지로 보고 제외
@@ -552,6 +586,25 @@ async def _scrape_site_via_handler(
                 logger.info(f"[{site.code}] {kw_why} 매칭, skip: {r.title}")
                 _note_skip(skips, site, r.title, kw_why, r.detail_url, r.posted_date)
             continue
+        # 1.2) 검토 전용 키워드('적용' 등)에만 걸린 제목 → 감지목록 승격 없이 '검토 필요'.
+        #      본문이 비어도 OCR 승격은 하지 않고 캡처만 남긴다.
+        review_kw = review_only_keyword(r.title, keywords)
+        if review_kw:
+            shot = ""
+            if not (r.body_text or "").strip() and not _posted_too_old(r.posted_date):
+                run_date = run_id.split("_", 1)[0]
+                shot_name = f"{run_date}_{site.code}_{len(hits):02d}_review_{_slug(r.title)}.png"
+                shot_path = screenshot_root / shot_name
+                if await _screenshot_html(browser, r.detail_html, shot_path, base_url=site.list_url):
+                    shot = str(shot_path)
+            hit, why = _route_review_only(site, r.title, r.posted_date, r.detail_url,
+                                          r.body_text or "", review_kw, now, shot)
+            if hit is not None:
+                logger.info(f"[{site.code}] 검토 전용 키워드 '{review_kw}' → 검토 목록에 추가: {r.title}")
+                hits.append(hit)
+            else:
+                _skip_or_review(r.title, r.posted_date, r.detail_url, r.body_text or "", why)
+            continue
         # 1.5) 제목은 점검 공지인데 본문이 비어있으면(이미지로만 된 공지 등) 자기 기관
         #      검증·일시 추출이 불가능하다. 조용히 버리지 말고 이미지를 캡처해 '검토 필요'로
         #      남겨 사람이 확인하도록 한다.
@@ -740,6 +793,8 @@ async def _scrape_site(
             # 강제 검토 마커([중요] 등) 제목은 점검 키워드에 안 걸려도 상세에 진입해
             # 본문을 확보한 뒤 '검토 필요'로 보낸다 (감지목록 승격은 하지 않음)
             force_kw_review = (not kw_ok) and title_forces_review(title, keywords)
+            # 검토 전용 키워드('적용' 등)에만 걸린 제목 — 상세 진입 후 '검토 필요'로만 보낸다
+            review_kw = review_only_keyword(title, keywords) if kw_ok else ""
             if not kw_ok and not force_kw_review:
                 # 제목 단계 제외 (include 매칭 + exclude 걸림)만 기록
                 if kw_why:
@@ -803,7 +858,7 @@ async def _scrape_site(
                 parsed = await _ocr_extract_window(shot_path if shot_ok else None, site, _now)
                 # 강제 검토 마커 제목(점검 키워드 미스)은 OCR이 일시를 읽어도
                 # 감지목록으로 승격하지 않고 '검토 필요'로만 남긴다
-                if parsed is not None and not force_kw_review:
+                if parsed is not None and not force_kw_review and not review_kw:
                     window, ocr_text = parsed
                     schedule_text = format_schedule(window) or window.raw
                     service_text = _resolve_service_text(title, ocr_text)
@@ -828,6 +883,8 @@ async def _scrape_site(
                         title=title, posted_date=posted_date, detail_url=detail_url or "",
                         screenshot_path=str(shot_path) if shot_ok else "",
                         window=None, needs_review=True,
+                        reason_text=(f"검토 전용 키워드 '{review_kw}' — 점검 여부 확인 필요"
+                                     if review_kw else ""),
                     ))
                 try:
                     if page.url != list_page_url:
@@ -847,6 +904,38 @@ async def _scrape_site(
             if force_kw_review:
                 _skip_or_review(title, posted_date, detail_url or "", body_text or "",
                                 kw_why or "점검 키워드 없음")
+                try:
+                    if page.url != list_page_url:
+                        await page.goto(site.list_url, wait_until="domcontentloaded", timeout=20000)
+                        if site.wait_selector:
+                            try:
+                                await page.wait_for_selector(site.wait_selector, timeout=10000)
+                            except PWTimeoutError:
+                                pass
+                        rows = page.locator(site.list_item_selector)
+                except Exception:
+                    pass
+                continue
+
+            # 검토 전용 키워드('적용' 등)에만 걸린 제목 → 본문 기준 제외 검사만 거친 뒤
+            # 외부기관·일시 검사 없이 '검토 필요'로 보낸다 (감지목록 승격은 하지 않음)
+            if review_kw:
+                reason_preview = _label_value(body_text, _REASON_LABELS)
+                service_preview = _label_value(body_text, _SERVICE_LABELS)
+                kw_ok, kw_why = maintenance_verdict(
+                    title, keywords, reason_preview, service_preview, body_text)
+                if not kw_ok:
+                    _skip_or_review(title, posted_date, detail_url or "", body_text or "",
+                                    kw_why or "본문 기준 제외 키워드 매칭")
+                else:
+                    hit, why = _route_review_only(
+                        site, title, posted_date, detail_url or "", body_text or "",
+                        review_kw, datetime.now(), str(shot_path) if shot_ok else "")
+                    if hit is not None:
+                        logger.info(f"[{site.code}] 검토 전용 키워드 '{review_kw}' → 검토 목록에 추가: {title}")
+                        hits.append(hit)
+                    else:
+                        _skip_or_review(title, posted_date, detail_url or "", body_text or "", why)
                 try:
                     if page.url != list_page_url:
                         await page.goto(site.list_url, wait_until="domcontentloaded", timeout=20000)
