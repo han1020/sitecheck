@@ -187,3 +187,5 @@ institution_aliases:
   - NH농협은행
   - IBK기업은행
   - 하나은행
+  - 이베스트투자증권    # sites.yaml 은 'LS증권' (2024 사명 변경 전 표기)
+  - DB금융투자          # sites.yaml 은 'DB증권' (2025 사명 변경 전 표기)

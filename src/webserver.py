@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import html
 import logging
 import re
 import threading
@@ -373,6 +374,174 @@ def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
         f"{str(item.get('title',''))[:30]} | 스킵목록 추가={added} | 스샷삭제={shot_deleted}"
     )
     return {"ok": True, "already_listed": not added, "screenshot_deleted": shot_deleted}
+
+
+# ---------------------------------------------------------------------------
+# 업데이트 내역 뷰 — README.md 의 '## 최근 변경 (YYYY-MM)' 섹션을 파싱해 표시
+README_PATH = PROJECT_ROOT / "README.md"
+_CHANGELOG_HEAD_RE = re.compile(r"^## 최근 변경 \((\d{4}-\d{2})\)\s*$")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_MD_BULLET_RE = re.compile(r"^(\s*)[-*] (.*)$")
+_MD_H3_DATE_RE = re.compile(r"^(.*?)\s*\((\d{4}-\d{2}-\d{2})\)\s*$")
+
+
+def _md_inline(text: str) -> str:
+    """마크다운 인라인(코드·굵게·링크)만 HTML로. 나머지는 이스케이프.
+    코드 조각을 자리표시자로 빼둔 뒤 굵게/링크를 적용해, **굵게 안에 `코드`**도 처리된다."""
+    codes: List[str] = []
+
+    def _stash(m):
+        codes.append(f"<code>{html.escape(m.group(1))}</code>")
+        return f"\x00{len(codes) - 1}\x00"
+
+    t = _MD_INLINE_CODE_RE.sub(_stash, text)
+    t = html.escape(t, quote=False)
+    t = _MD_BOLD_RE.sub(r"<b>\1</b>", t)
+    t = _MD_LINK_RE.sub(r'<a href="\2" target="_blank">\1</a>', t)
+    return re.sub(r"\x00(\d+)\x00", lambda m: codes[int(m.group(1))], t)
+
+
+def _md_block(lines: List[str]) -> str:
+    """불릿(들여쓰기 중첩)·인용·문단만 지원하는 간이 렌더러."""
+    out: List[str] = []
+    stack: List[int] = []          # 열려 있는 <ul> 의 들여쓰기 폭
+    para: List[str] = []
+
+    def flush_para():
+        if para:
+            out.append(f"<p>{_md_inline(' '.join(para))}</p>")
+            para.clear()
+
+    def close_lists(to_depth: int):
+        while len(stack) > to_depth:
+            out.append("</li></ul>")
+            stack.pop()
+
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            flush_para()
+            continue
+        m = _MD_BULLET_RE.match(line)
+        if m:
+            flush_para()
+            indent = len(m.group(1).replace("\t", "  "))
+            # 새 불릿: 더 깊으면 하위 목록 열기, 얕으면 닫기, 같으면 형제
+            while stack and indent < stack[-1]:
+                out.append("</li></ul>")
+                stack.pop()
+            if not stack or indent > stack[-1]:
+                out.append("<ul>")
+                stack.append(indent)
+            else:
+                out.append("</li>")
+            out.append(f"<li>{_md_inline(m.group(2))}")
+            continue
+        if stack:
+            # 불릿 내부 이어지는 줄
+            out.append(" " + _md_inline(line.strip()))
+            continue
+        if line.startswith(">"):
+            flush_para()
+            out.append(f"<blockquote>{_md_inline(line.lstrip('> ').strip())}</blockquote>")
+            continue
+        para.append(line.strip())
+    flush_para()
+    close_lists(0)
+    return "".join(out)
+
+
+def _split_entries(month_lines: List[str]) -> List[Dict[str, str]]:
+    """월 섹션 안을 항목으로 나눈다. '### 제목 (날짜)' 소제목이 있으면 소제목 단위,
+    없으면(2026-06 이전 형식) 최상위 불릿 하나가 항목 하나."""
+    entries: List[Dict[str, str]] = []
+    if any(l.startswith("### ") for l in month_lines):
+        cur: Optional[Dict[str, Any]] = None
+        for l in month_lines:
+            if l.startswith("### "):
+                if cur:
+                    entries.append({**cur, "html": _md_block(cur["lines"])})
+                head = l[4:].strip()
+                dm = _MD_H3_DATE_RE.match(head)
+                cur = {"title": _md_inline(dm.group(1) if dm else head),
+                       "date": dm.group(2) if dm else "", "lines": []}
+            elif cur is not None:
+                cur["lines"].append(l)
+        if cur:
+            entries.append({**cur, "html": _md_block(cur["lines"])})
+        for e in entries:
+            e.pop("lines", None)
+        return entries
+    # 불릿 형식: 최상위 불릿마다 항목. 굵은 선두 텍스트를 제목으로 뽑는다.
+    cur_lines: List[str] = []
+
+    def push():
+        if not cur_lines:
+            return
+        first = _MD_BULLET_RE.match(cur_lines[0])
+        body = first.group(2) if first else cur_lines[0]
+        bm = re.match(r"^\*\*(.+?)\*\*[:：]?\s*(.*)$", body)
+        if bm:
+            title, rest = bm.group(1), bm.group(2)
+        else:
+            title, rest = body[:60], ""
+        rest_lines = ([f"- {rest}"] if rest else []) + cur_lines[1:]
+        entries.append({"title": _md_inline(title), "date": "", "html": _md_block(rest_lines)})
+        cur_lines.clear()
+
+    for l in month_lines:
+        m = _MD_BULLET_RE.match(l)
+        if m and m.group(1) == "":
+            push()
+            cur_lines.append(l)
+        elif cur_lines:
+            cur_lines.append(l)
+    push()
+    return entries
+
+
+def parse_changelog() -> Dict[str, Any]:
+    """README.md 의 '## 최근 변경 (YYYY-MM)' 섹션들을 {months:[{month, entries:[{title,date,html}]}]} 로."""
+    try:
+        text = README_PATH.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"path": str(README_PATH), "months": [], "error": f"README 읽기 실패: {e}"}
+    months: List[Dict[str, Any]] = []
+    cur_month: Optional[str] = None
+    cur_lines: List[str] = []
+    in_code = False
+
+    def flush():
+        if cur_month is not None:
+            months.append({"month": cur_month, "entries": _split_entries(cur_lines)})
+
+    for line in text.splitlines():
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            if cur_month is not None:
+                cur_lines.append(line)
+            continue
+        hm = _CHANGELOG_HEAD_RE.match(line)
+        if hm:
+            flush()
+            cur_month, cur_lines = hm.group(1), []
+            continue
+        if line.startswith("## ") and cur_month is not None:
+            flush()
+            cur_month, cur_lines = None, []
+            continue
+        if cur_month is not None:
+            cur_lines.append(line)
+    flush()
+    try:
+        rel = str(README_PATH.relative_to(PROJECT_ROOT))
+    except ValueError:
+        rel = str(README_PATH)
+    return {"path": rel, "months": months}
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1299,18 @@ _INDEX_HTML = """<!DOCTYPE html>
   .skip-why.external { background: #e0e7ff; color: #3730a3; }
   .skip-why.past { background: #f1f5f9; color: #64748b; }
   .skip-why.parse { background: #fee2e2; color: #b91c1c; }
+  .subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 10px; border-bottom: 2px solid #e5e7eb; }
+  .subtab { background: transparent; color: #6b7280; border: 0; padding: 7px 14px; font-size: 13px; cursor: pointer;
+            border-bottom: 2px solid transparent; margin-bottom: -2px; }
+  .subtab:hover { color: #1f2937; }
+  .subtab.active { color: #1f2937; font-weight: 600; border-bottom-color: #1f2937; }
+  .subtab .cnt { color: #9ca3af; font-weight: 400; margin-left: 4px; font-size: 12px; }
+  .site-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+  .site-chip { background: #f1f5f9; border: 1px solid #e2e8f0; color: #334155; border-radius: 999px;
+               padding: 3px 11px; font-size: 12px; cursor: pointer; }
+  .site-chip:hover { background: #e2e8f0; }
+  .site-chip.active { background: #1f2937; border-color: #1f2937; color: #fff; }
+  .site-chip .cnt { opacity: .65; margin-left: 4px; }
   td.title-cell { max-width: 260px; }
   .legend { font-size: 12px; color: #6b7280; margin: 8px 0 10px; }
   .legend .sw { display: inline-block; width: 12px; height: 12px; background: #fffbcc;
@@ -1175,6 +1356,22 @@ _INDEX_HTML = """<!DOCTYPE html>
   .kw-sec h3 { font-size: 14px; margin: 0 0 3px; }
   .kw-sec .hint { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
   .kw-sec .cnt { font-size: 12px; color: #9ca3af; font-weight: 400; }
+  .cl-month { margin-bottom: 18px; }
+  .cl-month > h3 { font-size: 14px; margin: 0 0 8px; cursor: pointer; user-select: none; color: #1f2937; }
+  .cl-month > h3 .cnt { font-size: 12px; color: #9ca3af; font-weight: 400; margin-left: 6px; }
+  .cl-month > h3::before { content: '▾'; display: inline-block; width: 14px; color: #9ca3af; }
+  .cl-month.collapsed > h3::before { content: '▸'; }
+  .cl-month.collapsed .cl-entry { display: none; }
+  .cl-entry { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 18px; margin-bottom: 10px; }
+  .cl-entry .cl-title { font-size: 13.5px; font-weight: 600; margin-bottom: 6px; }
+  .cl-entry .cl-date { display: inline-block; font-size: 11px; color: #6b7280; background: #f3f4f6;
+                       border-radius: 999px; padding: 1px 8px; margin-left: 8px; font-weight: 400; vertical-align: middle; }
+  .cl-body { font-size: 13px; color: #374151; line-height: 1.55; }
+  .cl-body ul { margin: 4px 0 4px 18px; padding: 0; }
+  .cl-body li { margin: 2px 0; }
+  .cl-body p { margin: 4px 0; }
+  .cl-body code { background: #f1f5f9; border-radius: 4px; padding: 0 4px; font-size: 12px; }
+  .cl-body blockquote { margin: 6px 0; padding: 6px 10px; border-left: 3px solid #d1d5db; color: #6b7280; background: #f9fafb; }
   .kw-list { display: flex; flex-wrap: wrap; gap: 7px; }
   .kw-chip { display: inline-flex; align-items: center; background: #f1f5f9; border: 1px solid #e2e8f0;
              border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: #334155; }
@@ -1225,6 +1422,7 @@ _INDEX_HTML = """<!DOCTYPE html>
     <button class="tab" id="tabExcel" onclick="switchView('excel')">엑셀뷰</button>
     <button class="tab" id="tabRegular" onclick="switchView('regular')">정기점검</button>
     <button class="tab" id="tabKeywords" onclick="switchView('keywords')">제외 키워드</button>
+    <button class="tab" id="tabChangelog" onclick="switchView('changelog')">업데이트 내역</button>
   </div>
 
   <!-- 감지 목록 -->
@@ -1252,17 +1450,9 @@ _INDEX_HTML = """<!DOCTYPE html>
       외부기관 안내·제외 키워드·지난 점검·일시 파싱 실패로 감지 목록에서 빠진 공지입니다.
       <b>잘못 제외된 공지가 없는지</b> 여기서 확인하세요. (일시 파싱 실패는 놓친 점검일 수 있습니다)
     </div>
+    <div class="subtabs" id="skipCatTabs"></div>
+    <div class="site-chips" id="skipSiteChips"></div>
     <div class="toolbar" style="margin-bottom:10px">
-      <label class="status">사유:
-        <select id="skipFilter" onchange="renderSkips()"><option value="">(전체)</option></select>
-      </label>
-      <label class="status">분류:
-        <select id="skipCatFilter" onchange="onSkipCatChange()"><option value="">(전체)</option></select>
-      </label>
-      <label class="status">기관:
-        <select id="skipSiteFilter" onchange="renderSkips()"><option value="">(전체)</option></select>
-      </label>
-      <button class="tab" style="padding:6px 12px" onclick="resetSkipFilters()">필터 초기화</button>
       <span class="status" id="skipCount"></span>
     </div>
     <table>
@@ -1347,6 +1537,16 @@ _INDEX_HTML = """<!DOCTYPE html>
       <b>다음 수집부터</b> 적용됩니다 (이미 수집된 결과는 '지금 수집'으로 다시 돌려야 반영).
     </div>
     <div id="kwSections"></div>
+  </div>
+
+  <!-- 업데이트 내역 뷰 -->
+  <div id="viewChangelog" style="display:none">
+    <h2>업데이트 내역 <span class="status" id="clPath"></span></h2>
+    <div class="legend">
+      코드·설정 변경 이력입니다. <code>README.md</code>의 '최근 변경' 섹션을 그대로 읽어오므로 README를 고치면 여기도 바뀝니다.
+      월 제목을 누르면 접거나 펼칠 수 있습니다.
+    </div>
+    <div id="clSections"></div>
   </div>
 </div>
 
@@ -1521,79 +1721,64 @@ function skipWhyClass(why){
   return '';
 }
 
-function rebuildSelect(id, entries, prev){
-  // entries = [{value, label, count}] — 옵션에 건수 표기, 이전 선택 유지
-  const sel = document.getElementById(id);
-  sel.innerHTML = '<option value="">(전체)</option>' +
-    entries.map(e => `<option value="${esc(e.value)}">${esc(e.label)} (${e.count})</option>`).join('');
-  if(prev && entries.some(e => e.value === prev)) sel.value = prev;
-}
-
 function countBy(list, keyFn){
   const m = new Map();
   for(const s of list){ const k = keyFn(s); m.set(k, (m.get(k)||0)+1); }
   return m;
 }
 
+// 분류 탭 표시 순서. 데이터에만 있는 분류는 뒤에 붙인다.
+const SKIP_CAT_ORDER = ['은행', '저축은행', '증권', '카드', '공공'];
+let skipCat = '';    // 선택된 분류 (빈 값이면 아직 미선택 → 첫 탭 자동 선택)
+let skipSite = '';   // 선택된 기관코드 (빈 값 = 분류 전체)
+
 function buildSkipFilter(){
-  const prevWhy = document.getElementById('skipFilter').value;
-  const prevCat = document.getElementById('skipCatFilter').value;
-  const prevSite = document.getElementById('skipSiteFilter').value;
-
-  // 사유 앞부분(괄호 전)으로 그룹핑
-  const whyMap = countBy(curSkipped, s => (s.why||'').split('(')[0].trim());
-  rebuildSelect('skipFilter',
-    [...whyMap.entries()].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]))
-      .map(([k,n]) => ({value:k, label:k, count:n})), prevWhy);
-
-  // 분류 (은행/증권/카드 …)
-  const catMap = countBy(curSkipped, s => s.category || '');
-  rebuildSelect('skipCatFilter',
-    [...catMap.entries()].sort((a,b) => a[0].localeCompare(b[0]))
-      .map(([k,n]) => ({value:k, label:k, count:n})), prevCat);
-
-  buildSkipSiteFilter(prevSite);
+  const catMap = countBy(curSkipped, s => s.category || '기타');
+  const cats = [...SKIP_CAT_ORDER.filter(c => catMap.has(c)),
+                ...[...catMap.keys()].filter(c => !SKIP_CAT_ORDER.includes(c)).sort()];
+  if(!cats.includes(skipCat)){ skipCat = cats[0] || ''; skipSite = ''; }
+  document.getElementById('skipCatTabs').innerHTML = cats.map(c =>
+    `<button class="subtab ${c === skipCat ? 'active' : ''}" onclick="selectSkipCat(this.dataset.cat)" data-cat="${esc(c)}">` +
+    `${esc(c)}<span class="cnt">${catMap.get(c)}</span></button>`).join('');
+  buildSkipSiteChips();
 }
 
-// 기관 옵션은 선택된 '분류'에 속한 기관만 보여준다 (분류 변경 시 재구성)
-function buildSkipSiteFilter(prevSite){
-  const cat = document.getElementById('skipCatFilter').value;
-  const base = cat ? curSkipped.filter(s => (s.category||'') === cat) : curSkipped;
+// 기관 칩은 선택된 분류에 속한 기관만. '전체' 칩이 기본.
+function buildSkipSiteChips(){
+  const base = curSkipped.filter(s => (s.category || '기타') === skipCat);
   const siteMap = new Map();
   for(const s of base){
     const k = s.site_code || '';
     if(!siteMap.has(k)) siteMap.set(k, {name: s.site_name || '', count: 0});
     siteMap.get(k).count++;
   }
-  // 이전 선택이 새 옵션에 없으면 자동으로 (전체)로 리셋됨
-  rebuildSelect('skipSiteFilter',
-    [...siteMap.entries()].sort((a,b) => a[0].localeCompare(b[0]))
-      .map(([k,v]) => ({value:k, label:`${k} ${v.name}`, count:v.count})),
-    prevSite ?? document.getElementById('skipSiteFilter').value);
+  if(skipSite && !siteMap.has(skipSite)) skipSite = '';
+  const chips = [...siteMap.entries()].sort((a,b) => a[1].name.localeCompare(b[1].name, 'ko') || a[0].localeCompare(b[0]));
+  document.getElementById('skipSiteChips').innerHTML = base.length ? (
+    `<button class="site-chip ${skipSite ? '' : 'active'}" onclick="selectSkipSite('')">전체<span class="cnt">${base.length}</span></button>` +
+    chips.map(([k,v]) =>
+      `<button class="site-chip ${k === skipSite ? 'active' : ''}" onclick="selectSkipSite(this.dataset.code)" data-code="${esc(k)}" title="${esc(k)}">` +
+      `${esc(v.name || k)}<span class="cnt">${v.count}</span></button>`).join('')) : '';
 }
 
-function onSkipCatChange(){
-  buildSkipSiteFilter();
+function selectSkipCat(cat){
+  skipCat = cat; skipSite = '';
+  buildSkipFilter();
   renderSkips();
 }
 
-function resetSkipFilters(){
-  for(const id of ['skipFilter','skipCatFilter','skipSiteFilter'])
-    document.getElementById(id).value = '';
-  buildSkipSiteFilter();
+function selectSkipSite(code){
+  skipSite = code || '';
+  buildSkipSiteChips();
   renderSkips();
 }
 
 function renderSkips(){
-  const why = document.getElementById('skipFilter').value;
-  const cat = document.getElementById('skipCatFilter').value;
-  const site = document.getElementById('skipSiteFilter').value;
   const list = curSkipped.filter(s =>
-    (!why || (s.why||'').split('(')[0].trim() === why) &&
-    (!cat || (s.category||'') === cat) &&
-    (!site || (s.site_code||'') === site));
+    (!skipCat || (s.category || '기타') === skipCat) &&
+    (!skipSite || (s.site_code||'') === skipSite));
   document.getElementById('skipCount').textContent =
-    curSkipped.length ? `${list.length}/${curSkipped.length}건` : '';
+    curSkipped.length ? `${skipCat || '전체'}${skipSite ? ' · ' + skipSite : ''}: ${list.length}건 (전체 ${curSkipped.length}건)` : '';
   const tb = document.getElementById('skipRows');
   if(list.length === 0){
     tb.innerHTML = '<tr><td colspan="7" class="muted">스킵된 공지가 없습니다. (이전 실행 기록에는 스킵 데이터가 없을 수 있습니다)</td></tr>';
@@ -1874,9 +2059,9 @@ function showBody(h){
 // ---- 뷰 전환 ----
 function switchView(name){
   const views = {matched:'viewMatched', review:'viewReview', skipped:'viewSkipped',
-                 excel:'viewExcel', regular:'viewRegular', keywords:'viewKeywords'};
+                 excel:'viewExcel', regular:'viewRegular', keywords:'viewKeywords', changelog:'viewChangelog'};
   const tabs = {matched:'tabMatched', review:'tabReview', skipped:'tabSkipped',
-                excel:'tabExcel', regular:'tabRegular', keywords:'tabKeywords'};
+                excel:'tabExcel', regular:'tabRegular', keywords:'tabKeywords', changelog:'tabChangelog'};
   for(const [k, id] of Object.entries(views))
     document.getElementById(id).style.display = (name === k) ? 'block' : 'none';
   for(const [k, id] of Object.entries(tabs))
@@ -1884,6 +2069,29 @@ function switchView(name){
   if(name === 'excel') loadExcels();
   if(name === 'regular') loadRegular();
   if(name === 'keywords') loadKeywords();
+  if(name === 'changelog') loadChangelog();
+}
+
+// ---- 업데이트 내역 (README '최근 변경') ----
+let changelogLoaded = false;
+async function loadChangelog(){
+  if(changelogLoaded) return;
+  const d = await (await fetch('/api/changelog')).json();
+  document.getElementById('clPath').textContent = d.path ? `(${d.path})` : '';
+  const wrap = document.getElementById('clSections');
+  if(d.error){ wrap.innerHTML = `<div class="err-box">${esc(d.error)}</div>`; return; }
+  if(!d.months || !d.months.length){ wrap.innerHTML = '<div class="muted">README에 「최근 변경」 섹션이 없습니다.</div>'; return; }
+  // 서버가 README 마크다운을 HTML로 변환해 보내므로(이스케이프 처리됨) 그대로 삽입
+  wrap.innerHTML = d.months.map((m, i) => `
+    <div class="cl-month ${i >= 2 ? 'collapsed' : ''}">
+      <h3 onclick="this.parentElement.classList.toggle('collapsed')">${esc(m.month)}<span class="cnt">${m.entries.length}건</span></h3>
+      ${m.entries.map(e => `
+        <div class="cl-entry">
+          <div class="cl-title">${e.title}${e.date ? `<span class="cl-date">${esc(e.date)}</span>` : ''}</div>
+          <div class="cl-body">${e.html}</div>
+        </div>`).join('')}
+    </div>`).join('');
+  changelogLoaded = true;
 }
 
 async function loadKeywords(){
@@ -2168,6 +2376,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(data); return
         if path == "/api/keywords":
             self._send_json(parse_keywords_raw()); return
+        if path == "/api/changelog":
+            self._send_json(parse_changelog()); return
         if path == "/api/regular":
             self._send_json(regular_baseline()); return
         if path == "/api/excels":

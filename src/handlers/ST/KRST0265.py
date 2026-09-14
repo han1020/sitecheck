@@ -1,7 +1,8 @@
 """
-KRST0265 - 이베스트투자증권 / LS증권 (LS Securities)
+KRST0265 - LS증권 (구 이베스트투자증권, LS Securities)
 
-호스트가 https://www.ls-sec.co.kr 로 변경되어 사실상 LS증권 공지사항 게시판.
+2024 사명 변경으로 호스트가 https://www.ls-sec.co.kr 로 바뀌었고 공지 본문도 'LS증권'으로만
+표기된다. sites.yaml 의 name 은 LS증권, 옛 이름은 aliases 로 두어 자기기관 판별을 통과시킨다.
 
 흐름:
   1) GET https://www.ls-sec.co.kr/Main.jsp (초기 쿠키)

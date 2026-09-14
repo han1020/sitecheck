@@ -347,7 +347,8 @@ sites:
     name: 모바일증권 나무
     category: 증권
     enabled: true
-    list_url: https://m.nhqv.com/
+    aliases: [NH투자증권, 나무증권, NAMUH, 나무]   # NH투자증권의 모바일 브랜드 — 본문은 'NH투자증권'으로 표기
+    list_url: https://www.mynamuh.com/
 
   - code: KRST0261
     name: 교보증권
@@ -369,10 +370,11 @@ sites:
     list_url: https://bbn.kiwoom.com/bbs/SBbsNoticeNWWNZListAjax
 
   - code: KRST0265
-    name: 이베스트투자증권
+    name: LS증권
     category: 증권
     enabled: true
-    list_url: https://www.ebestsec.co.kr/
+    aliases: [이베스트투자증권, 이베스트투자, 이베스트]   # 2024 사명 변경(이베스트투자증권 → LS증권)
+    list_url: https://www.ls-sec.co.kr/
 
   - code: KRST0266
     name: SK증권
@@ -405,10 +407,11 @@ sites:
     list_url: https://www.shinhansec.com/
 
   - code: KRST0279
-    name: DB금융투자
+    name: DB증권
     category: 증권
     enabled: true
-    list_url: https://www.db-fi.com/
+    aliases: [DB금융투자, 디비금융투자, 디비증권]   # 2025 사명 변경(DB금융투자 → DB증권). 본문은 'DB증권'으로만 표기
+    list_url: https://www.dbsec.co.kr/
 
   - code: KRST0280
     name: 유진투자증권

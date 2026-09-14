@@ -14,7 +14,7 @@ from . import KRST1247  # noqa: F401 모바일증권 나무
 from . import KRST0261  # noqa: F401 교보증권
 from . import KRST0262  # noqa: F401 iM증권(구 하이투자증권)
 from . import KRST0264  # noqa: F401 키움증권
-from . import KRST0265  # noqa: F401 이베스트투자증권
+from . import KRST0265  # noqa: F401 LS증권(구 이베스트투자증권)
 from . import KRST0266  # noqa: F401 SK증권
 from . import KRST0267  # noqa: F401 대신증권
 from . import KRST0269  # noqa: F401 한화투자증권
