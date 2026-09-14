@@ -4,3 +4,43 @@ skips:
     title: "인프라 고도화에 의한 업무 일시중단 안내(7/18)"
     posted_date: "20260710"
     skipped_at: "2026-07-28 14:46"
+  - site_code: KRST0262
+    title: "예스트레이더(YesTrader) 서비스 일시 중단 안내 (8/2)"
+    posted_date: "20260731"
+    skipped_at: "2026-08-04 17:30"
+  - site_code: KRBK0109
+    title: "[중요] 뱅킹서비스 리뉴얼 오픈 안내"
+    posted_date: "20260821"
+    skipped_at: "2026-08-21 13:32"
+  - site_code: KRBK0109
+    title: "[중요] 모바일뱅킹/인터넷뱅킹/모바일웹 서비스 리뉴얼 안내"
+    posted_date: "20260806"
+    skipped_at: "2026-08-21 13:33"
+  - site_code: KRST0262
+    title: "예스트레이더(YesTrader) 서비스 일시 중단 안내 (8/29)"
+    posted_date: "20260827"
+    skipped_at: "2026-09-01 10:06"
+  - site_code: KRBK0101
+    title: "[더케이] 2026.08.22 통합금융정보시스템 서비스일시중단안내"
+    posted_date: "20260810"
+    skipped_at: "2026-09-01 10:08"
+  - site_code: KRBK0112
+    title: "BNK 퇴직연금 정기예금 2026년 9월 적용 금리 안내"
+    posted_date: "20260828"
+    skipped_at: "2026-09-11 09:48"
+  - site_code: KRST0238
+    title: "‘미래에셋증권 군인연금 안심통장’ 적용이율 인상 안내"
+    posted_date: "20260908"
+    skipped_at: "2026-09-11 09:48"
+  - site_code: KRST0261
+    title: "2026년 9월 정기 종목증거금 변경 적용의 건"
+    posted_date: "20260904"
+    skipped_at: "2026-09-11 09:48"
+  - site_code: KRST0227
+    title: "CMA 및 RP 적용 수익률 변경(시행일 2026.08.28)"
+    posted_date: "20260828"
+    skipped_at: "2026-09-11 09:48"
+  - site_code: KRCK0002
+    title: "인증기관(코스콤) 시스템 작업에 따른 일부 서비스 제한 안내"
+    posted_date: "2026-09-07"
+    skipped_at: "2026-09-11 13:55"

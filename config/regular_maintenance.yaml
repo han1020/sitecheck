@@ -31,7 +31,7 @@ regular:
 
   - code: "KRBK0088"
     name: "신한은행"
-    schedule: "매주 목요일 21:00 ~ 23:00"
+    schedule: "매주 목요일 21:00 ~ 익일 02:00"
     service: "기업인터넷뱅킹 일부 업무 지연"
     reason: "정기 개선 작업"
 
@@ -67,12 +67,6 @@ regular:
 
   - code: "KRPP0002"
     name: "국민건강보험"
-    schedule: "매주 화요일 18:30 ~ 20:00"
-    service: "대표 홈페이지 일시적으로 서비스 순단 현상"
-    reason: "홈페이지 수정사항 정기반영"
-
-  - code: "KRPP0002"
-    name: "국민건강보험"
-    schedule: "매주 토요일 23:00 ~ 09:00"
+    schedule: "매월 셋째 주 일요일 01:00 ~ 08:00"
     service: "징수포털 모든 서비스 제한"
     reason: "인터넷 시스템 정기 점검"
