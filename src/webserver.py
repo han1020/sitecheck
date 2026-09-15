@@ -1345,6 +1345,22 @@ _INDEX_HTML = """<!DOCTYPE html>
   #bodyOverlay h3 { margin: 0 0 12px; font-size: 16px; }
   #bodyOverlay .body-text { white-space: pre-wrap; word-break: break-all; font-size: 13px;
     line-height: 1.6; color: #333; }
+  #addOverlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: center; justify-content: center; z-index: 60; }
+  #addOverlay .add-box { background: #fff; max-width: 560px; width: 92%; max-height: 88vh;
+    border-radius: 8px; padding: 20px 24px; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,.35); }
+  #addOverlay h3 { margin: 0 0 4px; font-size: 16px; }
+  #addOverlay .add-site { font-size: 12.5px; color: #6b7280; margin-bottom: 14px; word-break: break-all; }
+  #addOverlay label { display: block; font-size: 12.5px; font-weight: 600; color: #374151; margin: 10px 0 4px; }
+  #addOverlay label .hint { font-weight: 400; color: #9ca3af; margin-left: 6px; }
+  #addOverlay input, #addOverlay textarea { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db;
+    border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit; }
+  #addOverlay textarea { min-height: 64px; resize: vertical; }
+  #addOverlay .add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #addOverlay .cancel-btn { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 5px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  #addOverlay .cancel-btn:hover { background: #e5e7eb; }
+  #addOverlay .add-btn { padding: 6px 16px; font-size: 13px; }
   .title-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted;
     text-underline-offset: 3px; }
   .title-link:hover { color: #0b62d6; }
@@ -1555,6 +1571,22 @@ _INDEX_HTML = """<!DOCTYPE html>
   <div class="body-box">
     <h3 id="bodyOverlayTitle"></h3>
     <div class="body-text" id="bodyOverlayText"></div>
+  </div>
+</div>
+<div id="addOverlay" onclick="if(event.target===this)closeAddModal()">
+  <div class="add-box">
+    <h3>엑셀에 공지 추가</h3>
+    <div class="add-site" id="addSite"></div>
+    <label>일시<span class="hint">예: 2026.09.20(일) 00:00 ~ 06:00</span></label>
+    <input id="addSchedule" type="text" placeholder="점검 일시 (비워도 됨)"/>
+    <label>업무<span class="hint">영향받는 서비스</span></label>
+    <input id="addService" type="text" placeholder="예: 인터넷뱅킹, 모바일뱅킹 전체"/>
+    <label>사유</label>
+    <textarea id="addReason" placeholder="예: 전산시스템 정기 점검"></textarea>
+    <div class="add-actions">
+      <button class="cancel-btn" onclick="closeAddModal()">취소</button>
+      <button class="add-btn" id="addSubmit" onclick="submitAddModal()">엑셀에 추가</button>
+    </div>
   </div>
 </div>
 
@@ -2021,23 +2053,61 @@ async function skipReview(i, btn){
   }
 }
 
-async function addToExcel(i, btn){
+// ---- 검토 → 엑셀 추가 팝업 ----
+// 시스템이 붙인 설명(검토 사유)은 엑셀 '사유'로 쓰기 부적절하므로 제목으로 대체
+const _SYS_REASON_RE = /확인 필요|강제 검토 마커|외부 기관\(/;
+let addTarget = null;   // {h, btn}
+
+function addToExcel(i, btn){
   const h = curReview[i];
   if(!h){ return; }
   if(!curExcelName){ alert('대상 엑셀을 찾을 수 없습니다.'); return; }
-  if(!confirm(`이 공지를 엑셀에 추가할까요?\\n\\n[${h.site_code}] ${h.site_name}\\n${h.title}`)) return;
+  addTarget = {h, btn};
+  document.getElementById('addSite').textContent = `[${h.site_code || ''}] ${h.site_name || ''} · ${h.title || ''}`;
+  document.getElementById('addSchedule').value = h.schedule_text || '';
+  document.getElementById('addService').value = h.service_text || '';
+  const rt = (h.reason_text || '').trim();
+  document.getElementById('addReason').value = (rt && !_SYS_REASON_RE.test(rt)) ? rt : (h.title || '');
+  const sb = document.getElementById('addSubmit');
+  sb.disabled = false; sb.textContent = '엑셀에 추가';
+  document.getElementById('addOverlay').style.display = 'flex';
+  document.getElementById('addSchedule').focus();
+}
+
+function closeAddModal(){
+  document.getElementById('addOverlay').style.display = 'none';
+  addTarget = null;
+}
+
+async function submitAddModal(){
+  if(!addTarget) return;
+  const {h, btn} = addTarget;
+  const schedule = document.getElementById('addSchedule').value.trim();
+  const service  = document.getElementById('addService').value.trim();
+  const reason   = document.getElementById('addReason').value.trim();
+  if(!reason){ alert('사유를 입력하세요.'); document.getElementById('addReason').focus(); return; }
+  const sb = document.getElementById('addSubmit');
+  sb.disabled = true; sb.textContent = '추가 중…';
   btn.disabled = true; btn.textContent = '추가 중…';
-  // 구분(일반점검) / 기관코드 / 기관명 / 일시(빈칸) / 업무(빈칸) / 사유(제목)
-  const cells = ['일반점검', h.site_code || '', h.site_name || '', '', '', h.title || ''];
-  const r = await fetch('/api/excel/append', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({file: curExcelName, cells}),
-  });
-  const res = await r.json();
+  // 구분(일반점검) / 기관코드 / 기관명 / 일시 / 업무 / 사유
+  const cells = ['일반점검', h.site_code || '', h.site_name || '', schedule, service, reason];
+  let res;
+  try {
+    const r = await fetch('/api/excel/append', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({file: curExcelName, cells}),
+    });
+    res = await r.json();
+  } catch(e){ res = {ok:false, error:String(e)}; }
   if(res.ok){
     btn.textContent = res.duplicate ? '이미 추가됨' : '추가됨 ✓';
     btn.classList.add('added');
+    closeAddModal();
+    // 엑셀뷰가 같은 파일을 보고 있으면 즉시 갱신
+    if(curExcelFile && curExcelFile === curExcelName) loadExcel(curExcelFile);
+    if(res.duplicate) alert('같은 기관·사유의 행이 이미 엑셀에 있어 추가하지 않았습니다.\\n엑셀뷰에서 확인하세요.');
   } else {
+    sb.disabled = false; sb.textContent = '엑셀에 추가';
     btn.disabled = false; btn.textContent = '공지추가';
     alert('추가 실패: ' + (res.error || ''));
   }
