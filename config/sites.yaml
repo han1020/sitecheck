@@ -294,6 +294,19 @@ sites:
     enabled: false
     list_url: https://www.nhis.or.kr/
 
+  # ===================== 신용정보 =====================
+  - code: KRCI0022
+    name: 크레탑
+    category: 신용정보
+    enabled: true
+    # Vue SPA + dynaPath 봇 탐지 — 커스텀 핸들러 handlers/CI/KRCI0022.py (Playwright 새 headless 필수)
+    list_url: https://www.cretop.com/PL/CC/PLCC520M1
+    aliases:
+      - CRETOP
+      - 한국평가데이터
+      - KoDATA
+    max_items: 10
+
   # ===================== 증권 =====================
   - code: KRST0209
     name: 유안타증권

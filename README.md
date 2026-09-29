@@ -166,7 +166,7 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 ### `config/regular_maintenance.yaml`
 사이트별 **정기점검 baseline**. 스크래핑 결과와 무관하게 엑셀에 항상 포함됩니다. 정기점검 일정이 바뀌면 이 파일을 수정하거나 **웹 대시보드 '정기점검' 탭에서 직접 편집**하세요 (다음 수집부터 반영).
 
-## 현재 활성 사이트 (59개 = 은행 20 + 저축은행 13 + 증권 22 + 카드 3 + 공공 1)
+## 현재 활성 사이트 (60개 = 은행 20 + 저축은행 13 + 증권 22 + 카드 3 + 공공 1 + 신용정보 1)
 
 사이트별 커스텀 핸들러로 처리합니다.
 
@@ -263,6 +263,16 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 > 집계하며, 제목에 `[중앙회]`/`[더케이]`/`[키움YES]`/`[JT친애]` 태그가 붙습니다.
 > 하위 기관명을 `aliases`로 등록해 자기기관 필터를 통과시킵니다.
 
+### 신용정보 (1)
+
+| 코드 | 사이트 |
+|------|--------|
+| KRCI0022 | 크레탑 (CRETOP, 한국평가데이터) |
+
+> **크레탑(KRCI0022)**: Vue SPA인데 공지 목록·상세가 일반 JSON API가 아니라 `dynaPath`라는 난독화 봇 탐지 채널(암호화 POST)로만 내려와 `requests`로는 받을 수 없습니다. **핸들러가 자체 Playwright(sync)로 렌더링한 DOM만 읽습니다** (`handlers/CI/KRCI0022.py`). 흐름: 목록 `/PL/CC/PLCC520M1` 표에서 번호·제목·등록일자 → 제목 클릭 → 상세 `/PL/CC/PLCC520S1?notiSeq=NNNN&pageNum=1` 의 `.board-detail-text` 본문 → `go_back` 반복. 상세 URL은 직접 접근도 되므로 엑셀 참조 링크로 씁니다.
+>
+> **봇 탐지 우회 조건**: Playwright 기본 headless(chromium-headless-shell)는 dynaPath가 봇으로 판정해 공지 페이지를 "페이지가 만료되었습니다[8004]"로 바꿔 버립니다(홈은 정상). `channel="chromium"`(새 headless 모드) + `--disable-blink-features=AutomationControlled` 조합이면 통과하며, 플래그 없이 channel만 바꾸면 다시 막힙니다. 내장 Chromium으로 되므로 Docker 이미지에 별도 Chrome 설치는 불필요합니다. URL의 `h=` 쿼리는 사이트가 붙이는 만료성 타임스탬프라 항상 `h` 없는 URL로 진입합니다. 본문 표기가 "CRETOP"이라 자기기관 판별용 `aliases: [CRETOP, 한국평가데이터, KoDATA]` 등록. 점검 공지 본문 형식(`■ 작업일시 : 2026년 7월 30일(목) 18:00` / `■ 작업내용 : …`)은 기존 라벨 파서가 그대로 파싱합니다.
+
 ## 결과물
 
 ```
@@ -343,9 +353,12 @@ logs/
 │       │   ├── KRCD0305.py               # 비씨카드
 │       │   ├── KRCD0306.py               # 신한카드
 │       │   └── KRCD0311.py               # 롯데카드
-│       └── PP/                           # 공공 카테고리
-│           ├── __init__.py               # 등록된 공공 모듈
-│           └── KRNT.py                   # 국세청 홈택스 (Playwright 세션 + 토큰 재사용)
+│       ├── PP/                           # 공공 카테고리
+│       │   ├── __init__.py               # 등록된 공공 모듈
+│       │   └── KRNT.py                   # 국세청 홈택스 (Playwright 세션 + 토큰 재사용)
+│       └── CI/                           # 신용정보 카테고리
+│           ├── __init__.py               # 등록된 KRCI 모듈
+│           └── KRCI0022.py               # 크레탑 CRETOP (Playwright 새 headless, dynaPath 우회)
 └── output/
     ├── excel/
     └── screenshots/<YYYY-MM-DD>/
@@ -381,11 +394,19 @@ logs/
 - `command not found: python` → 가상환경 활성화 누락 (`source .venv/bin/activate`)
 - `playwright._impl._errors.Error: Executable doesn't exist` → `playwright install chromium` 미실행
 - 특정 사이트만 결과 0건 → `logs/run_*.log` 확인. "본문에서 점검 일시 파싱 실패" 다발이면 정규식 보강 필요
+- Playwright 핸들러가 봇 차단 화면만 받아 0건 (크레탑 `[8004]` 등) → 기본 headless가 headless-shell이라 탐지된 것. `channel="chromium"` + `--disable-blink-features=AutomationControlled` 로 launch (`handlers/CI/KRCI0022.py` 참고)
 - 엑셀이 일부 깨져 보임 → 한글 폰트가 없는 환경. macOS/Windows 기본 한글 폰트 환경에서 정상
 - (Docker) 수집이 돌다가 결과 없이 끝나고 `output/json`이 빔 → 컨테이너가 도중에 죽고 `restart` 정책으로 조용히 재시작된 것. `sudo docker inspect sitecheck-web --format '{{.RestartCount}}'`가 0보다 크면 확정. `dmesg`에 `invalid opcode ... libtorch_cpu.so`가 있으면 CPU가 AVX2 미지원인 경우로, 기본값(OCR 비양자화)에서는 발생하지 않아야 하나 `SITECHECK_OCR_QUANTIZE=1`을 켰다면 끄세요.
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-09)
+
+### 크레탑(CRETOP) 공지사항 수집 추가 — 신용정보 분류 신설 (2026-09-29)
+
+- **배경**: 한국평가데이터 CRETOP 공지사항(`/PL/CC/PLCC520M1`)을 점검 감시 대상에 추가 요청. 사용자가 준 URL의 `h=` 타임스탬프는 만료돼 "페이지가 만료되었습니다[8004]"만 떴고, Vue SPA라 curl로는 본문이 없었다.
+- **분석**: 공지 데이터가 `common.json` 같은 평문 API가 아니라 `dynaPath` 난독화 봇 탐지 채널(암호화 POST)로만 내려온다. Playwright 기본 headless(chromium-headless-shell)는 홈은 뜨지만 공지 페이지만 dynaPath가 `[8004]`로 대체. `channel="chromium"`(새 headless) + `--disable-blink-features=AutomationControlled`면 통과(플래그 없이는 실패), 실제 Chrome도 통과.
+- **변경**: `handlers/CI/KRCI0022.py` 신설(NH저축은행 KRBK0110과 같은 '렌더된 DOM 읽기 + 클릭·go_back' 패턴, launch 옵션만 위 조합). `handlers/CI/` 패키지 등록, `sites.yaml`에 `KRCI0022 크레탑 / 신용정보 / aliases [CRETOP, 한국평가데이터, KoDATA]` 추가, 대시보드 스킵 탭 분류 순서(`SKIP_CAT_ORDER`)에 '신용정보' 추가. 상세 URL은 `h`를 뗀 `/PL/CC/PLCC520S1?notiSeq=NNNN&pageNum=1`로 엑셀에 기록.
+- **검증**: 라이브 4건 모두 제목·등록일·본문 추출(12초). 현재 공지 4건은 점검 키워드 미해당(보안 프로토콜 종료 안내는 7/30 종료)이라 감지 0건이 정상. 본문 `■ 작업일시 : 2026년 7월 30일(목) 18:00`은 기존 파서로 파싱 확인.
 
 ### 검토 탭 '공지추가' 팝업 입력 (2026-09-15)
 

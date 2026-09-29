@@ -1760,7 +1760,7 @@ function countBy(list, keyFn){
 }
 
 // 분류 탭 표시 순서. 데이터에만 있는 분류는 뒤에 붙인다.
-const SKIP_CAT_ORDER = ['은행', '저축은행', '증권', '카드', '공공'];
+const SKIP_CAT_ORDER = ['은행', '저축은행', '증권', '카드', '공공', '신용정보'];
 let skipCat = '';    // 선택된 분류 (빈 값이면 아직 미선택 → 첫 탭 자동 선택)
 let skipSite = '';   // 선택된 기관코드 (빈 값 = 분류 전체)
 

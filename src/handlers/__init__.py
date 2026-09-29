@@ -33,6 +33,7 @@ from . import BK  # noqa: E402,F401  은행
 from . import CD  # noqa: E402,F401  카드
 from . import ST  # noqa: E402,F401  증권
 from . import PP  # noqa: E402,F401  공공
+from . import CI  # noqa: E402,F401  신용정보
 
 
 __all__ = ["HandlerResult", "register", "get_handler", "has_handler"]
