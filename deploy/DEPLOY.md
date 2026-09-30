@@ -97,7 +97,7 @@ server {
 
 ---
 
-## 6. 자동 주기 수집 (매주 화/금 13:00) — systemd timer
+## 6. 자동 주기 수집 (매주 화/금 10:00·14:00) — systemd timer
 
 웹의 `지금 수집` 버튼을 사람이 누르지 않아도, 정해진 시각에 자동 수집되게 합니다.
 `collect.py`는 웹의 '지금 수집'과 동일 파이프라인이라 결과가 **감지 목록 + 엑셀뷰** 양쪽에
@@ -105,7 +105,7 @@ server {
 
 ### 6-1. 서버 시간대부터 확인 (★ 중요)
 
-타이머의 `13:00`은 **서버 로컬 시간** 기준입니다. 한국 시간으로 돌리려면:
+타이머의 `10,14:00`은 **서버 로컬 시간** 기준입니다. 한국 시간으로 돌리려면:
 
 ```bash
 timedatectl                              # 현재 시간대 확인
@@ -147,5 +147,5 @@ sudo systemctl start sitecheck-collect.service
 | 유닛 | 역할 | enable 대상 |
 |------|------|-------------|
 | `sitecheck-web.service`     | 웹 대시보드 상주 | ✅ `enable --now` |
-| `sitecheck-collect.timer`   | 화/금 13:00 트리거 | ✅ `enable --now` |
+| `sitecheck-collect.timer`   | 화/금 10:00·14:00 트리거 | ✅ `enable --now` |
 | `sitecheck-collect.service` | 수집 1회 실행 | ❌ (타이머가 호출) |

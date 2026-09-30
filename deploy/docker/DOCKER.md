@@ -6,7 +6,7 @@ CentOS 7처럼 glibc가 낡아 Playwright Chromium이 직접 실행되지 않는
 | 구성 | venv 방식 | Docker 방식 |
 |------|-----------|-------------|
 | 웹 대시보드 상주 | `sitecheck-web.service` | `docker compose up -d web` (restart 정책으로 상주) |
-| 화/금 13:00 수집 | `sitecheck-collect.timer` | 동일한 timer가 `docker compose run --rm collect` 호출 |
+| 화/금 10:00·14:00 수집 | `sitecheck-collect.timer` | 동일한 timer가 `docker compose run --rm collect` 호출 |
 | 데이터 | `output/`, `logs/` | 호스트 디렉토리를 볼륨 마운트 (동일 경로) |
 
 ## 0. 사전 확인
@@ -51,7 +51,7 @@ sudo docker compose up -d web
 sudo docker compose run --rm collect
 ```
 
-## 4. 자동 주기 수집 (매주 화/금 13:00)
+## 4. 자동 주기 수집 (매주 화/금 10:00·14:00)
 
 ```bash
 # 서버 시간대 확인 (타이머는 로컬 시간 기준)
