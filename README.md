@@ -263,6 +263,8 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 > 집계하며, 제목에 `[중앙회]`/`[더케이]`/`[키움YES]`/`[JT친애]` 태그가 붙습니다.
 > 하위 기관명을 `aliases`로 등록해 자기기관 필터를 통과시킵니다.
 
+> **케이뱅크(KRBK0089)**: sites.yaml 표기는 `K뱅크`지만 공지 본문은 `케이뱅크`만 써서 자기기관 판별용 `aliases: [케이뱅크, kbank]` 등록 (없으면 점검 공지가 '본문에 K뱅크 미등장'으로 탈락).
+
 ### 신용정보 (1)
 
 | 코드 | 사이트 |
@@ -400,6 +402,13 @@ logs/
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-09)
+
+### 케이뱅크(KRBK0089) 점검 공지 자기기관 판별 탈락 보정 (2026-09-30)
+
+- **증상**: 케이뱅크 핸들러는 목록 10건을 정상 추출하지만, 「서비스 일시 중단 안내 (10/18)」(2026-10-18 00:00~10:00 전 서비스 중단)가 `외부 기관 안내 (본문에 K뱅크 미등장)`으로 스킵돼 감지목록·검토 탭 어디에도 안 올라옴.
+- **원인**: `sites.yaml` 기관명은 `K뱅크`인데 공지 본문은 전부 `케이뱅크` 표기. `keywords.yaml`의 `institution_aliases`에 `케이뱅크`가 있었지만 그건 외부기관 명부용이고, 자기기관 판별(`is_own_institution_notice`)은 sites.yaml의 `name`/`aliases`만 본다 (LS증권·DB증권 사명 변경 케이스와 같은 패턴).
+- **변경**: `sites.yaml` KRBK0089에 `aliases: [케이뱅크, kbank]` 추가.
+- **검증**: 케이뱅크 단독 파이프라인 재실행 시 10/18 공지가 감지목록에 잡힘(일시 `2026-10-18 00:00 ~ 10:00` 파싱 확인).
 
 ### 크레탑(CRETOP) 공지사항 수집 추가 — 신용정보 분류 신설 (2026-09-29)
 

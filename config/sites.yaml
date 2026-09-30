@@ -166,6 +166,8 @@ sites:
     name: K뱅크
     category: 은행
     enabled: true
+    # 본문 표기는 '케이뱅크'뿐 → 자기기관 판별용 별칭 (없으면 '본문에 K뱅크 미등장'으로 탈락)
+    aliases: [케이뱅크, kbank]
     list_url: https://biz.kbanknow.com/ib20/mnu/CBKCSC020100
 
   # ===================== 저축은행 =====================
