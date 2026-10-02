@@ -15,6 +15,7 @@ ExecStart=/opt/siteCheck/.venv/bin/python collect.py
 
 # 웹 서비스의 install 시 사용한 것과 동일한 브라우저 경로
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/siteCheck/.playwright
+EnvironmentFile=-/etc/sitecheck/api.env
 
 StandardOutput=journal
 StandardError=journal

@@ -17,5 +17,5 @@ RUN pip install --no-cache-dir torch==2.13.0 torchvision==0.28.0 --index-url htt
 
 COPY . .
 
-EXPOSE 8000
-CMD ["python", "serve.py", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 9095
+CMD ["python", "serve.py", "--host", "0.0.0.0", "--port", "9095"]

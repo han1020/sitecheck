@@ -4,11 +4,17 @@ services:
     image: sitecheck:latest
     container_name: sitecheck-web
     ports:
-      - "8000:8000"
+      - "9095:9095"
     volumes:
       - ./config:/app/config      # review_skips.yaml 등을 웹에서 쓰므로 rw 마운트
       - ./output:/app/output
       - ./logs:/app/logs
+    environment:
+      SITECHECK_API_BASE_URL: ${SITECHECK_API_BASE_URL:-}
+      SITECHECK_API_ENV: ${SITECHECK_API_ENV:-}
+      SITECHECK_API_AUTH_HEADER: ${SITECHECK_API_AUTH_HEADER:-Authorization}
+      SITECHECK_API_AUTH_VALUE: ${SITECHECK_API_AUTH_VALUE:-}
+      SITECHECK_API_TIMEOUT: ${SITECHECK_API_TIMEOUT:-15}
     shm_size: "1g"                # Chromium 공유메모리 부족 방지
     restart: unless-stopped
 
@@ -20,5 +26,11 @@ services:
       - ./config:/app/config
       - ./output:/app/output
       - ./logs:/app/logs
+    environment:
+      SITECHECK_API_BASE_URL: ${SITECHECK_API_BASE_URL:-}
+      SITECHECK_API_ENV: ${SITECHECK_API_ENV:-}
+      SITECHECK_API_AUTH_HEADER: ${SITECHECK_API_AUTH_HEADER:-Authorization}
+      SITECHECK_API_AUTH_VALUE: ${SITECHECK_API_AUTH_VALUE:-}
+      SITECHECK_API_TIMEOUT: ${SITECHECK_API_TIMEOUT:-15}
     shm_size: "1g"
     command: python collect.py

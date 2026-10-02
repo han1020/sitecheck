@@ -39,7 +39,7 @@ sudo docker compose build     # 최초 빌드는 torch/Chromium 때문에 10분+
 
 ```bash
 sudo docker compose up -d web
-# http://<서버IP>:8000 접속 → '지금 수집' 한 번 눌러 동작 확인
+# http://<서버IP>:9095 접속 → '지금 수집' 한 번 눌러 동작 확인
 ```
 
 `restart: unless-stopped`라 부팅 시 자동 시작됩니다 (docker.service가 enable 되어 있어야 함:
@@ -71,7 +71,7 @@ journalctl -u sitecheck-collect.service -f
 ## 5. 방화벽
 
 ```bash
-sudo firewall-cmd --add-port=8000/tcp --permanent && sudo firewall-cmd --reload
+sudo firewall-cmd --add-port=9095/tcp --permanent && sudo firewall-cmd --reload
 ```
 
 ## 코드 업데이트 시

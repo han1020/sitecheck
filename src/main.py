@@ -9,6 +9,7 @@ from pathlib import Path
 from .carryover import load_previous_general
 from .config_loader import load_keywords, load_regular, load_sites
 from .excel_writer import write_excel
+from .notice_sync import configured_sync, sync_workbook
 from .scraper import make_run_id, scrape_all, strip_already_collected
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +99,15 @@ async def run_once(headless: bool = True) -> Path:
     out_path = EXCEL_DIR / f"[사이트점검]_{date_compact}.xlsx"
     # 엑셀은 전체 hits(carryover 재감지 포함)로 작성 — 텍스트 갱신을 위해
     write_excel(hits, regular, out_path, run_id, carried=carried)
+    sync = configured_sync()
+    if sync is None:
+        log.warning("점검 API 미설정: 엑셀만 생성했습니다 (SITECHECK_API_BASE_URL 필요)")
+    else:
+        sync_result = sync_workbook(out_path, *sync)
+        log.info("점검 API 동기화: %s", sync_result)
+        if sync_result["errors"]:
+            # 엑셀은 이미 저장됨. 동기화 오류는 기록만 하고 다음 수집에서 다시 보낸다
+            log.error("DB 동기화 오류 %d건: %s", len(sync_result["errors"]), sync_result["errors"][:3])
 
     # 검토 필요 탭에서 스킵 처리한 공지는 다시 올리지 않음
     from .review_skips import filter_review_hits, load_review_skips

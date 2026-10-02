@@ -9,9 +9,9 @@
   - 과거 실행 결과 이력 조회 (output/json/*.json)
 
 실행:
-    python serve.py                # http://127.0.0.1:8000
+    python serve.py                # http://127.0.0.1:9095
     python serve.py --port 9000
-    python serve.py --host 0.0.0.0 --port 8000
+    python serve.py --host 0.0.0.0 --port 9095
 """
 from __future__ import annotations
 
@@ -42,6 +42,11 @@ from .excel_writer import (
 )
 from openpyxl.styles import PatternFill
 from .keyword_matcher import carryover_excluded, is_maintenance
+from .notice_api import NoticeApiError
+from .notice_sync import (append_row as api_append_row, configured_sync,
+                          delete_row as api_delete_row, item_from_cells,
+                          resolve_item, row_item_id,
+                          sync_workbook, update_row as api_update_row)
 from .scraper import (
     DEFAULT_SERVICE_TEXT, NoticeHit, make_run_id, scrape_all,
     strip_already_collected,
@@ -70,6 +75,7 @@ RUN_STATE: Dict[str, Any] = {
     "error_count": 0,          # 에러 사이트 수
     "error": "",
     "excel": "",
+    "sync": None,
     "progress_done": 0,        # 진행률: 처리 완료한 사이트 수
     "progress_total": 0,       # 진행률: 전체 사이트 수
     "progress_site": "",       # 진행률: 현재 처리 중 사이트명
@@ -919,7 +925,8 @@ def _read_excel(filename: str) -> Optional[Dict[str, Any]]:
             cells.append(val)
         if not nonempty:
             continue
-        rows.append({"excel_row": r, "cells": cells, "is_new": is_new})
+        rows.append({"excel_row": r, "cells": cells, "is_new": is_new,
+                     "item_id": row_item_id(ws, r)})
 
     # 실행정보 시트(있으면) 메타 추출
     meta: Dict[str, str] = {}
@@ -944,6 +951,20 @@ def update_excel_rows(filename: str, edits: List[Dict[str, Any]]) -> Dict[str, A
         if RUN_STATE.get("status") == "running":
             return {"ok": False, "error": "수집 중에는 편집할 수 없습니다. 잠시 후 다시 시도하세요."}
     with _excel_lock:
+        try:
+            sync = configured_sync()
+            if sync is not None:
+                updated = 0
+                for edit in edits:
+                    result = api_update_row(
+                        path, int(edit.get("excel_row", 0)), edit.get("cells") or [],
+                        *sync, allow_schedule_create=bool(edit.get("allow_schedule_create")))
+                    if not result["ok"]:
+                        return {**result, "updated": updated}
+                    updated += result["updated"]
+                return {"ok": True, "updated": updated}
+        except (NoticeApiError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc), "updated": locals().get("updated", 0)}
         wb = load_workbook(path)  # 스타일 보존 위해 data_only=False
         ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
         max_row = ws.max_row
@@ -971,6 +992,12 @@ def delete_excel_row(filename: str, excel_row: int) -> Dict[str, Any]:
         if RUN_STATE.get("status") == "running":
             return {"ok": False, "error": "수집 중에는 삭제할 수 없습니다. 잠시 후 다시 시도하세요."}
     with _excel_lock:
+        try:
+            sync = configured_sync()
+            if sync is not None:
+                return api_delete_row(path, excel_row, *sync)
+        except (NoticeApiError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
         wb = load_workbook(path)
         ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
         if excel_row <= _XL_HEADER_ROW or excel_row > ws.max_row:
@@ -1004,7 +1031,8 @@ def delete_excel_file(filename: str) -> Dict[str, Any]:
     return {"ok": True, "file": filename}
 
 
-def append_excel_row(filename: str, cells: List[Any]) -> Dict[str, Any]:
+def append_excel_row(filename: str, cells: List[Any], *, action: str | None = None,
+                     linked_id: str | None = None) -> Dict[str, Any]:
     """엑셀 '점검' 시트 맨 위(헤더 바로 아래)에 한 행 추가. 검토 탭 '공지추가' 버튼용.
 
     cells = [구분, 기관코드, 기관명, 일시, 업무, 사유] (부족하면 빈칸 보충).
@@ -1021,6 +1049,12 @@ def append_excel_row(filename: str, cells: List[Any]) -> Dict[str, Any]:
     vals += [""] * (_XL_NCOLS - len(vals))
 
     with _excel_lock:
+        try:
+            sync = configured_sync()
+            if sync is not None:
+                return api_append_row(path, vals, *sync, action=action, linked_id=linked_id)
+        except (NoticeApiError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
         wb = load_workbook(path)  # 스타일 보존
         ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
         # 중복 방지: 같은 (기관코드, 사유) 행이 이미 있으면 추가하지 않음
@@ -1051,6 +1085,60 @@ def append_excel_row(filename: str, cells: List[Any]) -> Dict[str, Any]:
     return {"ok": True, "excel_row": new_row}
 
 
+def sync_excel_file(filename: str) -> Dict[str, Any]:
+    path = _excel_path(filename)
+    if path is None:
+        return {"ok": False, "error": "엑셀 파일을 찾을 수 없습니다."}
+    with _run_lock:
+        if RUN_STATE["status"] == "running":
+            return {"ok": False, "error": "수집 중에는 동기화할 수 없습니다."}
+    with _excel_lock:
+        try:
+            sync = configured_sync()
+            if sync is None:
+                return {"ok": False, "error": "SITECHECK_API_BASE_URL이 설정되지 않았습니다."}
+            result = sync_workbook(path, *sync)
+            return {"ok": not result["errors"], **result}
+        except (NoticeApiError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
+def decide_excel_row(filename: str, excel_row: int, action: str,
+                     linked_id: str | None = None) -> Dict[str, Any]:
+    path = _excel_path(filename)
+    if path is None:
+        return {"ok": False, "error": "엑셀 파일을 찾을 수 없습니다."}
+    if action not in ("LINK", "NEW_ALLOW", "HOLD"):
+        return {"ok": False, "error": "결정은 LINK, NEW_ALLOW, HOLD 중 하나여야 합니다."}
+    with _run_lock:
+        if RUN_STATE["status"] == "running":
+            return {"ok": False, "error": "수집 중에는 결정할 수 없습니다."}
+    with _excel_lock:
+        try:
+            sync = configured_sync()
+            if sync is None:
+                return {"ok": False, "error": "API가 설정되지 않았습니다."}
+            api, state = sync
+            wb = load_workbook(path, read_only=True, data_only=True)
+            try:
+                ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
+                if excel_row < 3 or excel_row > ws.max_row:
+                    raise ValueError("잘못된 행 번호입니다.")
+                cells = [ws.cell(excel_row, col).value for col in range(2, 8)]
+            finally:
+                wb.close()
+            item = item_from_cells(cells)
+            if action != "HOLD":
+                resolved = resolve_item(api, state, item, action=action, linked_id=linked_id)
+                if resolved["status"] in ("NEEDS_DECISION", "HOLD", "SUPPRESSED_DELETED"):
+                    raise ValueError("삭제되었거나 유효하지 않은 공지는 결정 대상으로 사용할 수 없습니다.")
+            state.decide(item, action, linked_id)
+            result = sync_workbook(path, api, state)
+            return {"ok": not result["errors"], **result}
+        except (NoticeApiError, ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
 def sort_excel_rows(filename: str) -> Dict[str, Any]:
     """'점검' 시트의 '일반점검' 행끼리만 (일시 → 기관코드) 오름차순 정렬.
 
@@ -1070,7 +1158,7 @@ def sort_excel_rows(filename: str) -> Dict[str, Any]:
         start = _XL_HEADER_ROW + 1
         end = ws.max_row
 
-        captured: List[tuple] = []  # (vals[6], fill_rgb)
+        captured: List[tuple] = []  # (vals[6], fill_rgb, item_id)
         for r in range(start, end + 1):
             vals, nonempty = [], False
             for i in range(_XL_NCOLS):
@@ -1084,7 +1172,7 @@ def sort_excel_rows(filename: str) -> Dict[str, Any]:
             f = ws.cell(row=r, column=_XL_DATA_START_COL).fill
             rgb = (getattr(getattr(f, "fgColor", None), "rgb", None)
                    if getattr(f, "patternType", None) == "solid" else None)
-            captured.append((vals, rgb))
+            captured.append((vals, rgb, row_item_id(ws, r)))
 
         # 일반점검만 (일시 시작시각 → 기관코드) 정렬. 그 외(정기점검 등)는 원순서로 뒤에.
         # 일시는 '시작 ~ 종료' 형식이라 '~' 앞(시작시각)만 1차 키로 써 같은 시작시각이면
@@ -1094,7 +1182,7 @@ def sort_excel_rows(filename: str) -> Dict[str, Any]:
         general.sort(key=lambda x: (x[0][3].split("~")[0].strip(), x[0][1].strip()))
         ordered = general + others
 
-        for idx, (vals, rgb) in enumerate(ordered):
+        for idx, (vals, rgb, item_id) in enumerate(ordered):
             r = start + idx
             for i in range(_XL_NCOLS):
                 c = ws.cell(row=r, column=_XL_DATA_START_COL + i, value=vals[i])
@@ -1103,6 +1191,7 @@ def sort_excel_rows(filename: str) -> Dict[str, Any]:
                 c.alignment = _XL_CENTER if i < 3 else _XL_LEFT_WRAP
                 c.fill = PatternFill("solid", fgColor=rgb) if rgb else PatternFill(fill_type=None)
             ws.row_dimensions[r].height = 32
+            ws.cell(r, 8).value = item_id
 
         # 정렬로 압축되어 남은 꼬리 행 정리
         for r in range(start + len(ordered), end + 1):
@@ -1110,6 +1199,7 @@ def sort_excel_rows(filename: str) -> Dict[str, Any]:
                 c = ws.cell(row=r, column=_XL_DATA_START_COL + i)
                 c.value = None
                 c.fill = PatternFill(fill_type=None)
+            ws.cell(r, 8).value = None
 
         wb.save(path)
         wb.close()
@@ -1128,7 +1218,7 @@ async def _collect() -> None:
     with _run_lock:
         RUN_STATE.update(status="running", run_id=run_id, started=_now_str(),
                          finished="", count=0, review_count=0, error_count=0,
-                         error="", excel="",
+                         error="", excel="", sync=None,
                          progress_done=0, progress_total=0, progress_site="")
 
     sites = load_sites(CONFIG_DIR / "sites.yaml")
@@ -1180,6 +1270,16 @@ async def _collect() -> None:
     out_path = EXCEL_DIR / f"[사이트점검]_{today_compact}.xlsx"
     # 엑셀은 전체 hits(carryover 재감지 포함)로 작성 — 텍스트 갱신을 위해
     write_excel(hits, regular, out_path, run_id, carried=carried)
+    sync = configured_sync()
+    sync_result = sync_workbook(out_path, *sync) if sync else {"status": "not_configured"}
+    sync_error = ""
+    if sync and sync_result["errors"]:
+        # 엑셀은 이미 저장됐다. DB 동기화 실패로 수집을 실패시키지 않고 상태줄에 표시만 한다
+        # (같은 행은 다음 수집에서 다시 전송되므로 자동 복구)
+        sync_error = f"DB 동기화 오류 {len(sync_result['errors'])}건"
+        logger.error(f"{sync_error}: {sync_result['errors'][:3]}")
+    with _run_lock:
+        RUN_STATE["sync"] = sync_result
 
     # 검토 필요 탭에서 스킵 처리한 공지는 다시 올리지 않음 (스킵 탭에 기록)
     from .review_skips import filter_review_hits, load_review_skips
@@ -1196,7 +1296,8 @@ async def _collect() -> None:
     with _run_lock:
         RUN_STATE.update(status="done", finished=_now_str(),
                          count=len(matched), review_count=len(review),
-                         error_count=len(errors), excel=out_path.name)
+                         error_count=len(errors), excel=out_path.name,
+                         error=sync_error)
     logger.info(
         f"수집 완료: {run_id} | 감지 {len(matched)}건 | "
         f"검토 필요 {len(review)}건 | 에러 {len(errors)}곳"
@@ -1274,9 +1375,9 @@ _INDEX_HTML = """<!DOCTYPE html>
   .err-box { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 8px;
              padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
   h2 { font-size: 15px; margin: 22px 0 10px; }
-  .tabs { display: flex; gap: 6px; margin: 4px 0 16px; }
+  .tabs { display: flex; gap: 6px; margin: 4px 0 16px; overflow-x: auto; padding-bottom: 4px; }
   .tab { background: #e5e7eb; color: #374151; border: 0; padding: 8px 16px; border-radius: 6px;
-         font-size: 13px; cursor: pointer; }
+         font-size: 13px; cursor: pointer; flex: none; white-space: nowrap; }
   .tab.active { background: #1f2937; color: #fff; }
   .badge { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 4px; border-radius: 999px;
            background: #f59e0b; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
@@ -1353,8 +1454,11 @@ _INDEX_HTML = """<!DOCTYPE html>
   #addOverlay .add-site { font-size: 12.5px; color: #6b7280; margin-bottom: 14px; word-break: break-all; }
   #addOverlay label { display: block; font-size: 12.5px; font-weight: 600; color: #374151; margin: 10px 0 4px; }
   #addOverlay label .hint { font-weight: 400; color: #9ca3af; margin-left: 6px; }
-  #addOverlay input, #addOverlay textarea { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db;
+  #addOverlay input, #addOverlay textarea, #addOverlay select { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db;
     border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit; }
+  #dbPending { margin: 8px 0 14px; }
+  #dbPending .pending-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid #e5e7eb; }
+  #dbPending select { max-width: min(100%, 520px); min-width: 200px; }
   #addOverlay textarea { min-height: 64px; resize: vertical; }
   #addOverlay .add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   #addOverlay .cancel-btn { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 5px;
@@ -1529,6 +1633,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       <button class="del-btn" id="excelDelBtn" title="선택한 엑셀 파일 삭제" onclick="deleteExcelFile()">🗑 파일 삭제</button>
       <button id="saveBtn" onclick="saveExcel()" disabled>변경사항 저장</button>
       <button id="sortBtn" onclick="sortExcel()">일시·기관코드 정렬</button>
+      <button id="syncBtn" onclick="syncExcel()" title="선택한 엑셀을 DB 저장 API와 동기화">DB 동기화</button>
       <span class="status" id="editState"></span>
       <a id="excelDl" class="status" href="#" style="display:none">다운로드</a>
     </div>
@@ -1538,6 +1643,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       행 끝 🗑 으로 삭제
     </div>
     <div class="meta-line" id="excelMeta"></div>
+    <div id="dbPending"></div>
     <table>
       <thead><tr id="excelHead"></tr></thead>
       <tbody id="excelRows"><tr><td class="muted">엑셀 파일을 선택하세요.</td></tr></tbody>
@@ -1578,11 +1684,15 @@ _INDEX_HTML = """<!DOCTYPE html>
     <h3>엑셀에 공지 추가</h3>
     <div class="add-site" id="addSite"></div>
     <label>일시<span class="hint">예: 2026.09.20(일) 00:00 ~ 06:00</span></label>
-    <input id="addSchedule" type="text" placeholder="점검 일시 (비워도 됨)"/>
+    <input id="addSchedule" type="text" placeholder="점검 일시"/>
     <label>업무<span class="hint">영향받는 서비스</span></label>
     <input id="addService" type="text" placeholder="예: 인터넷뱅킹, 모바일뱅킹 전체"/>
     <label>사유</label>
     <textarea id="addReason" placeholder="예: 전산시스템 정기 점검"></textarea>
+    <div id="addDecisionWrap" style="display:none">
+      <label for="addDecision">같은 기관·일시의 기존 공지</label>
+      <select id="addDecision"></select>
+    </div>
     <div class="add-actions">
       <button class="cancel-btn" onclick="closeAddModal()">취소</button>
       <button class="add-btn" id="addSubmit" onclick="submitAddModal()">엑셀에 추가</button>
@@ -1606,6 +1716,9 @@ async function refreshStatus(){
   }
   line.innerHTML = `<span class="dot ${s.status}"></span>${label}` +
     (s.finished ? ` · 마지막 실행 ${esc(s.finished)}` : (s.started ? ` · 시작 ${esc(s.started)}` : '')) +
+    (s.sync && s.sync.status === 'not_configured' ? ' · DB 미연동' :
+      s.sync ? ' · DB 저장 ' + s.sync.saved + ' · 판단 필요 ' + s.sync.held.length +
+        ' · DB 오류 ' + s.sync.errors.length : '') +
     (s.error ? ` · <span style="color:#fca5a5">${esc(s.error)}</span>` : '');
   btn.disabled = (s.status === 'running');
   btn.textContent = (s.status === 'running')
@@ -2055,7 +2168,7 @@ async function skipReview(i, btn){
 
 // ---- 검토 → 엑셀 추가 팝업 ----
 // 시스템이 붙인 설명(검토 사유)은 엑셀 '사유'로 쓰기 부적절하므로 제목으로 대체
-const _SYS_REASON_RE = /확인 필요|강제 검토 마커|외부 기관\(/;
+const _SYS_REASON_RE = /확인 필요|강제 검토 마커|외부 기관\\(/;
 let addTarget = null;   // {h, btn}
 
 function addToExcel(i, btn){
@@ -2070,6 +2183,8 @@ function addToExcel(i, btn){
   document.getElementById('addReason').value = (rt && !_SYS_REASON_RE.test(rt)) ? rt : (h.title || '');
   const sb = document.getElementById('addSubmit');
   sb.disabled = false; sb.textContent = '엑셀에 추가';
+  document.getElementById('addDecisionWrap').style.display = 'none';
+  document.getElementById('addDecision').innerHTML = '';
   document.getElementById('addOverlay').style.display = 'flex';
   document.getElementById('addSchedule').focus();
 }
@@ -2085,7 +2200,13 @@ async function submitAddModal(){
   const schedule = document.getElementById('addSchedule').value.trim();
   const service  = document.getElementById('addService').value.trim();
   const reason   = document.getElementById('addReason').value.trim();
+  if(!schedule){ alert('일시를 입력하세요.'); document.getElementById('addSchedule').focus(); return; }
   if(!reason){ alert('사유를 입력하세요.'); document.getElementById('addReason').focus(); return; }
+  const decisionWrap = document.getElementById('addDecisionWrap');
+  const choice = document.getElementById('addDecision').value;
+  if(decisionWrap.style.display !== 'none' && !choice){
+    alert('기존 공지 연결 또는 신규 등록을 선택하세요.'); return;
+  }
   const sb = document.getElementById('addSubmit');
   sb.disabled = true; sb.textContent = '추가 중…';
   btn.disabled = true; btn.textContent = '추가 중…';
@@ -2095,7 +2216,9 @@ async function submitAddModal(){
   try {
     const r = await fetch('/api/excel/append', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({file: curExcelName, cells}),
+      body: JSON.stringify({file: curExcelName, cells,
+        action: choice === 'NEW_ALLOW' ? 'NEW_ALLOW' : choice.startsWith('LINK:') ? 'LINK' : null,
+        linkedItemId: choice.startsWith('LINK:') ? choice.slice(5) : null}),
     });
     res = await r.json();
   } catch(e){ res = {ok:false, error:String(e)}; }
@@ -2105,11 +2228,25 @@ async function submitAddModal(){
     closeAddModal();
     // 엑셀뷰가 같은 파일을 보고 있으면 즉시 갱신
     if(curExcelFile && curExcelFile === curExcelName) loadExcel(curExcelFile);
-    if(res.duplicate) alert('같은 기관·사유의 행이 이미 엑셀에 있어 추가하지 않았습니다.\\n엑셀뷰에서 확인하세요.');
+    if(res.duplicate) alert('동일한 공지가 엑셀에 있어 기존 행을 사용했습니다.');
   } else {
     sb.disabled = false; sb.textContent = '엑셀에 추가';
     btn.disabled = false; btn.textContent = '공지추가';
-    alert('추가 실패: ' + (res.error || ''));
+    if(res.needs_decision){
+      const sel = document.getElementById('addDecision');
+      const options = ['<option value="">선택하세요</option>',
+        '<option value="NEW_ALLOW">별도 신규 공지로 등록</option>'];
+      for(const item of res.candidates || []){
+        const label = item.itemId + ' · ' + item.institutionName + ' · ' +
+          item.serviceText + ' · ' + item.reasonText;
+        options.push('<option value="LINK:' + esc(item.itemId) + '" ' +
+          (item.deletedAt ? 'disabled' : '') + '>' + esc(label) +
+          (item.deletedAt ? ' (삭제됨)' : '') + '</option>');
+      }
+      sel.innerHTML = options.join('');
+      decisionWrap.style.display = 'block';
+      sel.focus();
+    } else alert('추가 실패: ' + (res.error || ''));
   }
 }
 
@@ -2246,6 +2383,7 @@ function setEditState(msg, color){
 async function loadExcel(file){
   if(!file) return;
   curExcelFile = file;
+  document.getElementById('dbPending').innerHTML = '';
   const d = await (await fetch('/api/excel?file=' + encodeURIComponent(file))).json();
   const dl = document.getElementById('excelDl');
   dl.style.display = 'inline'; dl.href = '/excel/' + encodeURIComponent(file);
@@ -2285,6 +2423,69 @@ async function loadExcel(file){
   setEditState('');
 }
 
+function renderDbPending(held){
+  const box = document.getElementById('dbPending');
+  box.innerHTML = '';
+  for(const entry of held || []){
+    const row = document.createElement('div');
+    row.className = 'pending-row';
+    const label = document.createElement('strong');
+    label.textContent = '엑셀 ' + entry.excelRow + '행 · 판단 필요';
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="">결정 선택</option><option value="HOLD">보류</option>' +
+      '<option value="NEW_ALLOW">별도 신규 등록</option>';
+    for(const item of entry.candidates || []){
+      const option = document.createElement('option');
+      option.value = 'LINK:' + item.itemId;
+      option.textContent = item.itemId + ' · ' + item.institutionName + ' · ' +
+        item.scheduleText + ' · ' + item.serviceText + (item.deletedAt ? ' (삭제됨)' : '');
+      option.disabled = !!item.deletedAt;
+      select.appendChild(option);
+    }
+    const button = document.createElement('button');
+    button.textContent = '적용';
+    button.onclick = () => applyDbDecision(entry.excelRow, select.value, button);
+    row.append(label, select, button);
+    box.appendChild(row);
+  }
+}
+
+async function syncExcel(){
+  if(!curExcelFile) return;
+  setEditState('DB 동기화 중…');
+  try{
+    const r = await fetch('/api/excel/sync', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:curExcelFile})});
+    const res = await r.json();
+    if(res.error){ setEditState(res.error, '#dc2626'); return; }
+    await loadExcel(curExcelFile);
+    renderDbPending(res.held);
+    setEditState('DB 저장 ' + res.saved + '건 · 삭제 제외 ' + res.suppressed +
+      '건 · 판단 필요 ' + res.held.length + '건 · 오류 ' + res.errors.length + '건',
+      res.errors.length ? '#dc2626' : '#16a34a');
+    if(res.errors.length) alert(res.errors.map(e => e.excelRow + '행: ' + e.error).join('\\n'));
+  }catch(e){ setEditState('DB 동기화 실패: ' + e, '#dc2626'); }
+}
+
+async function applyDbDecision(excelRow, choice, button){
+  if(!choice){ alert('결정을 선택하세요.'); return; }
+  button.disabled = true;
+  const action = choice.startsWith('LINK:') ? 'LINK' : choice;
+  const linkedItemId = action === 'LINK' ? choice.slice(5) : null;
+  try{
+    const r = await fetch('/api/excel/decide', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:curExcelFile, excel_row:excelRow, action, linkedItemId})});
+    const res = await r.json();
+    if(!res.ok){ alert(res.error || '결정 적용 실패'); return; }
+    await loadExcel(curExcelFile);
+    renderDbPending(res.held);
+    setEditState('DB 결정이 반영되었습니다.', '#16a34a');
+  }catch(e){ alert('결정 적용 실패: ' + e); }
+  finally{ button.disabled = false; }
+}
+
 function cellText(td){
   return td.innerText.replace(/\\u00a0/g, ' ').replace(/\\r/g, '').trimEnd();
 }
@@ -2302,6 +2503,20 @@ async function saveExcel(){
     body: JSON.stringify({file: curExcelFile, edits}),
   });
   const res = await r.json();
+  if(res.schedule_change){
+    if(confirm('일시를 바꾸면 새 공지로 등록되고 기존 공지는 유지됩니다. 계속할까요?')){
+      edits.forEach(e => { e.allow_schedule_create = true; });
+      const retry = await fetch('/api/excel/update', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({file:curExcelFile, edits})});
+      const answer = await retry.json();
+      if(answer.ok){
+        await loadExcel(curExcelFile);
+        setEditState('새 공지로 저장했습니다. 이전 공지는 별도 삭제가 필요합니다.', '#16a34a');
+      } else setEditState('저장 실패: ' + (answer.error || ''), '#dc2626');
+    } else setEditState('일시 변경을 취소했습니다.', '#b45309');
+    return;
+  }
   if(res.ok){
     setEditState(`저장 완료 (${res.updated}행)`, '#16a34a');
     loadExcel(curExcelFile);   // 엑셀에서 다시 읽어 동기화
@@ -2517,7 +2732,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(res, 200 if res.get("ok") else 400); return
         if parsed.path == "/api/excel/append":
             body = self._read_body()
-            res = append_excel_row(body.get("file", ""), body.get("cells") or [])
+            res = append_excel_row(body.get("file", ""), body.get("cells") or [],
+                                   action=body.get("action"), linked_id=body.get("linkedItemId"))
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/excel/sync":
+            body = self._read_body()
+            res = sync_excel_file(body.get("file", ""))
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/excel/decide":
+            body = self._read_body()
+            res = decide_excel_row(body.get("file", ""), int(body.get("excel_row", 0) or 0),
+                                   body.get("action", ""), body.get("linkedItemId"))
             self._send_json(res, 200 if res.get("ok") else 400); return
         if parsed.path == "/api/excel/sort":
             body = self._read_body()
@@ -2539,7 +2764,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
 
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
+def serve(host: str = "127.0.0.1", port: int = 9095) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",

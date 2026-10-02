@@ -13,11 +13,12 @@ Group=sitecheck
 # 프로젝트 경로 (git clone 한 위치)
 WorkingDirectory=/opt/siteCheck
 # venv 안의 python 으로 serve.py 실행 (호스트/포트 조정 가능)
-ExecStart=/opt/siteCheck/.venv/bin/python serve.py --host 0.0.0.0 --port 8000
+ExecStart=/opt/siteCheck/.venv/bin/python serve.py --host 0.0.0.0 --port 9095
 # ─────────────────────────────────────────────────────────────
 
 # Playwright 브라우저 설치 위치를 프로젝트 안에 고정 (install 시 동일 변수로 받아야 함)
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/siteCheck/.playwright
+EnvironmentFile=-/etc/sitecheck/api.env
 
 # 죽으면 5초 후 자동 재시작
 Restart=always

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SiteCheck 프로젝트 분석 및 DB 저장 설계 보고서</title>
+  <style>
+    :root {
+      --page: #f2f4f1;
+      --paper: #ffffff;
+      --ink: #17211d;
+      --muted: #66736c;
+      --line: #d7ddd9;
+      --line-strong: #b8c3bc;
+      --green: #174f3b;
+      --green-2: #287257;
+      --green-soft: #e7f1ec;
+      --blue: #285f8a;
+      --blue-soft: #eaf2f8;
+      --amber: #9a5d0d;
+      --amber-soft: #fff2d5;
+      --red: #983f38;
+      --red-soft: #fae9e7;
+      --code: #18201d;
+      --code-ink: #edf3ef;
+      --nav-width: 260px;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 28px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.68;
+      letter-spacing: 0;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+    .layout { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky; top: 0; height: 100vh; overflow-y: auto;
+      padding: 28px 22px; color: #eff5f1; background: #17362b; border-right: 1px solid #0e2a20;
+    }
+    .brand { padding-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, .16); }
+    .brand-label { margin: 0 0 7px; color: #9fc2b1; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .brand h1 { margin: 0; font-size: 22px; line-height: 1.35; letter-spacing: 0; }
+    .brand p { margin: 10px 0 0; color: #bfd2c8; font-size: 13px; }
+    nav { margin-top: 20px; }
+    nav a {
+      display: flex; gap: 10px; align-items: baseline; margin: 2px 0; padding: 8px 10px;
+      color: #c6d8cf; text-decoration: none; border-left: 2px solid transparent; border-radius: 0 4px 4px 0; font-size: 13px;
+    }
+    nav a:hover, nav a.active { color: #fff; background: rgba(255, 255, 255, .08); border-left-color: #78bd97; }
+    nav .num { width: 18px; color: #8fb2a1; font-variant-numeric: tabular-nums; }
+    .main { min-width: 0; padding: 34px 38px 80px; }
+    .report {
+      width: min(1160px, 100%); margin: 0 auto; background: var(--paper);
+      border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(24, 49, 38, .07);
+    }
+    .report-header { padding: 42px 48px 34px; border-bottom: 1px solid var(--line); }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font-size: 13px; font-weight: 800; }
+    .report-header h2 { margin: 0; max-width: 850px; font-size: 44px; line-height: 1.18; letter-spacing: 0; }
+    .lead { max-width: 840px; margin: 18px 0 0; color: #435149; font-size: 17px; line-height: 1.78; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 22px; color: var(--muted); font-size: 12px; }
+    .section { padding: 42px 48px; border-bottom: 1px solid var(--line); }
+    .section:last-of-type { border-bottom: 0; }
+    .section-head { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 24px; margin-bottom: 26px; }
+    .section-no { color: var(--green); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .section h2 { margin: 0; font-size: 27px; line-height: 1.32; letter-spacing: 0; }
+    .section-intro { max-width: 780px; margin: 8px 0 0; color: var(--muted); }
+    h3 { margin: 30px 0 12px; font-size: 19px; line-height: 1.42; letter-spacing: 0; }
+    p { margin: 10px 0; }
+    strong { font-weight: 800; }
+    .decision {
+      display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 22px; padding: 23px;
+      background: var(--green-soft); border: 1px solid #bad7c9; border-left: 5px solid var(--green); border-radius: var(--radius);
+    }
+    .decision-label { color: var(--green); font-weight: 800; }
+    .decision strong { display: block; margin-bottom: 6px; font-size: 21px; line-height: 1.35; }
+    .metrics {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 24px;
+      overflow: hidden; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius);
+    }
+    .metric { min-height: 108px; padding: 18px; background: #fbfcfb; }
+    .metric-value { display: block; margin-bottom: 5px; color: var(--green); font-size: 28px; font-weight: 800; line-height: 1.1; }
+    .metric-label { display: block; color: var(--muted); font-size: 12px; }
+    .answer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+    .answer { padding: 18px; border: 1px solid var(--line-strong); border-top: 4px solid var(--blue); border-radius: var(--radius); background: #fcfdfc; }
+    .answer:nth-child(2) { border-top-color: var(--amber); }
+    .answer:nth-child(3) { border-top-color: var(--green-2); }
+    .answer:nth-child(4) { border-top-color: var(--red); }
+    .answer b { display: block; margin-bottom: 6px; font-size: 16px; }
+    .answer p { margin: 0; color: var(--muted); font-size: 13px; }
+    .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+    .flow-step {
+      position: relative; min-height: 132px; padding: 16px 14px; background: #fafbf9;
+      border: 1px solid var(--line-strong); border-top: 4px solid var(--blue); border-radius: var(--radius);
+    }
+    .flow-step::after { content: ""; position: absolute; top: 50%; right: -11px; width: 10px; height: 1px; background: var(--line-strong); }
+    .flow-step:last-child::after { display: none; }
+    .flow-step b { display: block; margin-bottom: 7px; font-size: 14px; }
+    .flow-step span { display: block; color: var(--muted); font-size: 12px; line-height: 1.56; }
+    .note, .warning, .plain-note { margin: 20px 0; padding: 15px 18px; border-radius: var(--radius); font-size: 14px; }
+    .note { background: var(--blue-soft); border-left: 4px solid var(--blue); }
+    .warning { background: var(--amber-soft); border-left: 4px solid var(--amber); }
+    .plain-note { background: #f2f4f2; border-left: 4px solid #75827b; }
+    .table-wrap { overflow-x: auto; margin: 16px 0 24px; border: 1px solid var(--line); border-radius: var(--radius); }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; background: #fff; font-size: 13px; }
+    th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: #33423a; background: #f3f6f4; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    code {
+      padding: 2px 5px; color: #234c39; background: #edf3ef; border: 1px solid #d7e3dc; border-radius: 3px;
+      font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; word-break: break-all;
+    }
+    pre {
+      margin: 0; padding: 20px; overflow-x: auto; color: var(--code-ink); background: var(--code);
+      font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.64; white-space: pre; tab-size: 2;
+    }
+    pre code { padding: 0; color: inherit; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
+    details { margin: 16px 0; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); }
+    summary { cursor: pointer; padding: 14px 16px; color: #26382f; background: #f7f9f7; font-weight: 800; list-style-position: inside; }
+    details[open] summary { border-bottom: 1px solid var(--line); }
+    .detail-body { padding: 8px 18px 14px; }
+    .section > *, .flow-step, .answer { min-width: 0; }
+    :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+    .status { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .yes { color: var(--green); background: var(--green-soft); }
+    .no { color: var(--red); background: var(--red-soft); }
+    .conditional { color: var(--amber); background: var(--amber-soft); }
+    .schema { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 14px; margin-top: 18px; }
+    .schema-box { min-height: 205px; padding: 17px; background: #fff; border: 1px solid var(--line-strong); border-top: 4px solid var(--green); border-radius: var(--radius); }
+    .schema-box.primary { background: var(--green-soft); }
+    .schema-box.optional { border-top-color: var(--amber); }
+    .schema-box h3 { margin: 0 0 7px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 15px; }
+    .schema-box p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+    .schema-box ul { margin: 0; padding-left: 18px; color: #3f4d45; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.7; }
+    .relation {
+      margin-top: 14px; padding: 12px; color: #435048; background: #f5f7f5; border: 1px dashed var(--line-strong);
+      border-radius: var(--radius); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; text-align: center;
+    }
+    .api-row { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 18px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .api-row:last-child { border-bottom: 0; }
+    .api-path { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; word-break: break-word; }
+    .method { display: inline-block; min-width: 54px; margin-right: 6px; padding: 2px 6px; color: #fff; background: var(--blue); border-radius: 3px; text-align: center; font-weight: 800; }
+    .method.get { background: var(--green); }
+    .method.patch { background: var(--amber); }
+    .method.delete { background: var(--red); }
+    .api-row p { margin: 0; color: #455149; }
+    .plain-list { margin: 12px 0 0; padding-left: 21px; }
+    .plain-list li { margin: 7px 0; }
+    .checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 24px; margin: 14px 0 0; padding: 0; list-style: none; }
+    .checklist li { position: relative; padding: 9px 0 9px 26px; border-bottom: 1px solid var(--line); }
+    .checklist li::before { content: ""; position: absolute; left: 2px; top: 15px; width: 10px; height: 10px; border: 2px solid var(--green); border-radius: 2px; }
+    .footer {
+      display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 24px 48px;
+      color: var(--muted); background: #f7f9f7; border-top: 1px solid var(--line); font-size: 12px;
+    }
+    .print-button { padding: 8px 12px; color: var(--green); background: #fff; border: 1px solid var(--line-strong); border-radius: 4px; font: inherit; font-weight: 700; cursor: pointer; }
+    .print-button:hover { background: var(--green-soft); }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; padding: 18px 20px; }
+      .brand { padding-bottom: 13px; }
+      .brand p { display: none; }
+      nav { display: flex; gap: 4px; margin-top: 11px; overflow-x: auto; }
+      nav a { flex: 0 0 auto; border-left: 0; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
+      nav a:hover, nav a.active { border-left-color: transparent; border-bottom-color: #78bd97; }
+      .main { padding: 18px; }
+      .report-header, .section { padding: 32px 28px; }
+      .section-head { grid-template-columns: 1fr; gap: 6px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow-step::after { display: none; }
+      .schema { grid-template-columns: 1fr 1fr; }
+      .schema-box.primary { grid-column: 1 / -1; grid-row: 1; }
+      .api-row { grid-template-columns: 1fr; gap: 7px; }
+    }
+    @media (max-width: 640px) {
+      body { font-size: 14px; }
+      .main { padding: 0; }
+      .report { border-left: 0; border-right: 0; }
+      .report-header, .section { padding: 28px 20px; }
+      .report-header h2 { font-size: 31px; }
+      .lead { font-size: 15px; }
+      .decision { grid-template-columns: 1fr; gap: 8px; }
+      .metrics, .answer-grid, .flow, .schema, .checklist { grid-template-columns: 1fr; }
+      .schema-box.primary { grid-column: auto; grid-row: auto; }
+      .metric { min-height: auto; }
+      .footer { padding: 20px; align-items: flex-start; flex-direction: column; }
+    }
+    @media print {
+      body { background: #fff; font-size: 11px; }
+      .layout { display: block; }
+      .sidebar, .print-button { display: none; }
+      .main { padding: 0; }
+      .report { width: 100%; border: 0; box-shadow: none; }
+      .report-header, .section { padding: 24px 28px; }
+      .answer, .schema-box, tr { break-inside: avoid; }
+      h2, h3, .section-head, summary { break-after: avoid; }
+      .section, .table-wrap, details { break-inside: auto; }
+      .table-wrap { overflow: visible; }
+      table { min-width: 0; table-layout: fixed; font-size: 9px; }
+      th, td { padding: 7px; overflow-wrap: anywhere; }
+      th { white-space: normal; font-size: 9px; }
+      pre { white-space: pre-wrap; font-size: 9px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar"><div class="brand"><p class="brand-label">Final 1.3 · 2026.09.28</p><h1>SiteCheck<br>DB 저장 설계</h1><p>최종 결정 및 구현 인계 보고서</p></div>
+<nav aria-label="문서 목차"><a href="#summary"><span class="num">01</span><span>최종 결정</span></a>
+<a href="#workflow"><span class="num">02</span><span>현재 수집 구조</span></a>
+<a href="#identity"><span class="num">03</span><span>중복과 수동 연결</span></a>
+<a href="#schema"><span class="num">04</span><span>DB 설계</span></a>
+<a href="#project"><span class="num">05</span><span>프로젝트 작업</span></a>
+<a href="#api"><span class="num">06</span><span>API 구현</span></a>
+<a href="#delivery"><span class="num">07</span><span>진행 순서</span></a>
+<a href="#acceptance"><span class="num">08</span><span>검증과 한계</span></a></nav></aside>
+<main class="main"><article class="report">
+<header class="report-header"><p class="eyebrow">최종 설계 보고서 · 문서 준비 완료 / 구현 전</p><h2>SiteCheck 점검 공지<br>DB 저장 계획</h2><p class="lead">엑셀의 점검 공지를 DB에 보관하고, 반복 수집은 중복 저장하지 않습니다. 담당자가 수정한 값은 유지하며, 일시가 바뀐 공지는 별도 등록합니다. 현재 공지와 종료된 공지 모두 하나의 테이블에서 관리합니다.</p>
+<div class="meta"><span>DBMS: MySQL 8.0 이상</span><span>저장: 184 단일 서버</span><span>업무 테이블: 1개 / 컬럼: 13개</span><span>기준일: 2026-09-28</span></div>
+<p><a href="sitecheck-implementation-handoff.md">SiteCheck 프로젝트 작업 명세</a> · <a href="sitecheck-api-spec.md">외부 API 구현 명세</a> · <a href="sql/site_check_item.mysql.sql">실행용 DDL</a></p></header>
+<section class="section" id="summary"><div class="section-head"><div class="section-no">SECTION 01</div><h2>최종 결정</h2></div>
+<div class="decision"><div class="decision-label">최종 저장 구조</div><div><strong>184 서버의 GDS.TB_SITE_CHECK 한 테이블</strong>타팀도 이 테이블을 읽기 전용으로 조회합니다. 186 복제 테이블·VIEW·서버 간 동기화는 만들지 않습니다. “184”는 서버 구분용 표현이며 실제 주소는 사용자가 API 구현 프로젝트에 직접 전달합니다.</div></div>
+<div class="table-wrap"><table><thead><tr><th>항목</th><th>결정</th></tr></thead><tbody><tr><td>업무 범위</td><td>전체 수집 시스템을 DB로 전환하지 않습니다. 엑셀 B:G의 업무 6개 값과 시작·종료 시각을 저장합니다.</td></tr>
+<tr><td>보존 범위</td><td>최초에는 최신 엑셀 한 파일만 적재합니다. 이후 등록된 공지는 종료되어도 보관하고, 수정 전 값의 변경 이력은 만들지 않습니다.</td></tr>
+<tr><td>중복 기준</td><td>구분·기관코드·기관명·일시 원문·업무의 식별 정규화 값(NFC·줄바꿈·앞뒤 공백·대소문자 통일). 사유와 시작·종료 파싱 값은 제외합니다.</td></tr>
+<tr><td>재수집</td><td>정확한 중복 또는 유효한 수동 연결이면 기존 DB 전체 값을 사용합니다. 자동 수집으로 담당자의 수정을 덮어쓰지 않습니다.</td></tr>
+<tr><td>일시 변경</td><td>대소문자 통일 후에도 일시 원문이 다르면 새 공지입니다. 이전 공지는 담당자가 필요 시 소프트 삭제합니다.</td></tr>
+<tr><td>수정 충돌</td><td>version 없이 마지막으로 DB에 반영된 명시적 수정이 우선합니다. 생략 필드는 기존 값을 유지합니다.</td></tr>
+<tr><td>삭제·복원</td><td>엑셀 행 삭제를 소프트 삭제 API와 연결합니다. 동일 공지 자동 재등록은 금지하고 복원은 수동 DB 작업으로만 합니다.</td></tr>
+<tr><td>관측·수정 이력</td><td>snapshot·last_seen_at·observedAt·수정자·수정 이력 테이블은 두지 않습니다. 자동 재수집만으로 up_dt도 바꾸지 않습니다.</td></tr></tbody></table></div>
+<p class="note"><strong>last_seen_at을 빼도 되는 이유:</strong> 현재 요구는 “마지막으로 언제 수집됐는지”가 아니라 등록된 공지의 최신 내용과 종료 여부입니다. 원문 사이트에서 사라진 시점을 추적하거나 장기 미관측 공지를 자동 정리하는 기능은 제공하지 않습니다.</p></section>
+<section class="section" id="workflow"><div class="section-head"><div class="section-no">SECTION 02</div><h2>현재 수집 구조</h2></div>
+<p>웹사이트 수집 → 점검 후보 추출 → 검토·반영 → 엑셀 생성의 기존 흐름은 유지합니다. DB 연동은 최종 엑셀 행이 결정되는 지점과 담당자의 행 단위 작업에 추가합니다.</p>
+<div class="table-wrap"><table><thead><tr><th>현재 코드</th><th>분석 결과와 연결 방향</th></tr></thead><tbody><tr><td><a href="../src/excel_writer.py">excel_writer.py</a></td><td>웹 수집 행은 일반점검으로 작성하며 정기점검은 YAML 설정에서 별도로 구성합니다. 제목에 정기점검 키워드가 있다는 것만으로 정기점검으로 자동 분류되는 구조는 아닙니다.</td></tr>
+<tr><td><a href="../src/main.py">main.py</a> / <a href="../src/webserver.py">webserver.py</a></td><td>CLI와 웹 수집 모두 엑셀 생성 후 동일한 행 판정·API 연동 서비스를 사용하도록 연결합니다.</td></tr>
+<tr><td>기존 엑셀 중복 처리</td><td>carryover는 기관코드+일시 중심, 검토 페이지 추가는 기관코드+사유 중심입니다. 최종 DB 정책과 같지 않으므로 그대로 API 중복 기준으로 사용할 수 없습니다.</td></tr>
+<tr><td><a href="../src/carryover.py">carryover.py</a></td><td>최신 파일 선택과 이월 판정은 구분합니다. 최초 DB 적재에서 오늘 파일을 제외하면 안 됩니다. 종료가 없을 때 시작 시각을 대신 쓰는 기존 표시 판단을 DB 종료 값으로 저장하지 않습니다.</td></tr></tbody></table></div>
+<p>일반점검과 정기점검은 컬럼 구조가 같고 구분 조회만 필요하므로 테이블을 나누지 않습니다. <code>check_type</code>으로 구분합니다. 일시 원문은 필수지만 반복 일정은 실제 시작·종료 시각을 알 수 없어 <code>NULL</code>로 저장할 수 있습니다.</p>
+<p class="warning">현재 코드에는 일시가 비는 경로도 있습니다. 앞으로 저장 경계에서 필수 검증을 적용하고, 누락된 행은 보완 대상으로 남겨야 합니다. 빈 일시를 임의 날짜나 빈 문자열로 DB에 저장하지 않습니다.</p></section>
+<section class="section" id="identity"><div class="section-head"><div class="section-no">SECTION 03</div><h2>중복과 수동 연결</h2></div>
+<h3>1. 같은 내용은 하루가 지나도 한 건</h3>
+<p>어제와 오늘 동일한 5개 식별 값이 수집되면 같은 <code>item_id</code>를 사용합니다. 수집 회차나 엑셀 파일명을 식별키에 넣지 않습니다. 사유 A를 담당자가 B로 바꾼 뒤 A가 재수집되어도 B를 유지합니다.</p>
+<div class="table-wrap"><table><thead><tr><th>입력 변화</th><th>처리</th></tr></thead><tbody><tr><td>사유만 다름</td><td>기존 공지 사용. 기존 사유·업무 값·시작·종료를 모두 보존합니다.</td></tr>
+<tr><td>파싱된 시작·종료만 다름</td><td>기존 공지 사용. 시각 보정이 필요하면 명시적 PATCH로 수정합니다.</td></tr>
+<tr><td>업무 A사이트 점검 / a사이트 점검</td><td>같은 공지로 판정. 저장된 원문과 담당자 수정값을 유지합니다.</td></tr>
+<tr><td>식별 정규화 후 일시 원문이 다름</td><td>새 공지로 등록. 동일 URL·제목·사유라도 자동 연결하거나 이전 공지를 삭제하지 않습니다.</td></tr>
+<tr><td>식별 정규화한 구분·기관코드·일시가 같고 기관명 또는 업무가 다름</td><td>정확한 중복이 아니므로 후보를 보여주고 기존 연결·신규 등록·보류를 선택합니다.</td></tr>
+<tr><td>삭제된 정확한 키 또는 유효한 연결</td><td>재등록하지 않습니다. 복원은 담당자의 수동 DB 작업입니다.</td></tr></tbody></table></div>
+<h3>2. 사람이 판단하는 선택지</h3>
+<p>수집 값과 기존 후보를 나란히 보여주고 구분·기관코드·기관명·일시·업무·사유·시작·종료·삭제 상태를 비교합니다. 기존 연결은 다른 일시를 선택할 수 없으며, 삭제 후보도 선택할 수 없습니다.</p>
+<div class="table-wrap"><table><thead><tr><th>선택</th><th>결과</th><th>다음 수집</th></tr></thead><tbody><tr><td>기존 공지 연결</td><td>선택한 ID의 DB 값을 사용. 수집 값으로 덮어쓰지 않음</td><td>입력 식별 값 → ID 연결을 로컬에 기억하고 API로 재검증</td></tr>
+<tr><td>신규 등록</td><td>별도 공지로 저장. 정확한 중복은 신규 강제 등록 불가</td><td>신규 허용 결정을 기억하되 매번 정확한 중복 확인</td></tr>
+<tr><td>보류</td><td>DB 저장하지 않음. 보류 건수·사유를 명시</td><td>다음 수집에도 보류 유지. 담당자가 결정 변경 가능</td></tr></tbody></table></div>
+<h3>3. 해시만으로 수정 전 값을 기억할 수는 없음</h3>
+<p><code>dedup_hash</code>는 현재 5개 식별 값을 대소문자 통일 후 계산한 SHA-256입니다. 사유 수정이나 대소문자만 다른 재수집에는 유지되지만, 식별 정규화 후 기관명·업무가 달라지면 바뀝니다. 따라서 변경 전 입력과 현재 공지의 연결은 SiteCheck의 <code>output/state/{environment}/notice_state.json</code>에 별도로 보관합니다. 수동 연결을 선택했을 때도 같은 기록을 사용합니다.</p>
+<p>API 요청은 선택적 <code>linkedItemId</code>를 전달합니다. API는 대상의 구분·기관코드·식별 정규화한 일시가 입력과 일치하는지, 삭제되었는지, 입력의 정확한 키가 다른 ID에 이미 속하는지 매번 확인합니다. 연결이 유효하지 않으면 재검토하며 신규 등록으로 자동 전환하지 않습니다.</p>
+<p class="warning"><strong>운영 전제:</strong> 한 운영 호스트에서 환경별 상태 파일을 공유하고 파일 잠금·원자적 저장·백업을 적용합니다. 기록이 유실되면 이전 수동 연결을 자동 복원할 수 없습니다. 여러 독립 호스트로 확장할 때는 연결 상태를 공유 저장소로 옮기는 설계를 다시 해야 합니다.</p>
+<p class="plain-note">식별 정규화는 Unicode NFC, 줄바꿈 통일, 앞뒤 ASCII 공백 제거 뒤 Unicode casefold를 적용합니다. 내부 공백·요일·날짜 표기는 통합하지 않습니다. “같은 일시”는 실제 시각의 추정 일치가 아니라 식별 정규화한 일시 원문의 일치입니다. 원문 대소문자는 표시용으로 남깁니다.</p></section>
+<section class="section" id="schema"><div class="section-head"><div class="section-no">SECTION 04</div><h2>DB 설계</h2></div>
+<p>6개 업무 값 + 2개 시각 + 5개 관리 컬럼으로 총 13개입니다. 타팀도 동일 테이블에서 필요한 컬럼만 조회하며, 해시는 내부 중복 방어용으로 남깁니다.</p>
+<div class="table-wrap"><table><thead><tr><th>컬럼</th><th>타입</th><th>설명</th></tr></thead><tbody><tr><td>item_id</td><td>BIGINT UNSIGNED</td><td>공지 고유번호, PK</td></tr>
+<tr><td>check_type</td><td>VARCHAR(20) NOT NULL</td><td>일반점검 / 정기점검</td></tr>
+<tr><td>institution_code</td><td>VARCHAR(10) NOT NULL</td><td>정규화한 기관 코드</td></tr>
+<tr><td>institution_name</td><td>VARCHAR(100) NOT NULL</td><td>기관명 원문</td></tr>
+<tr><td>schedule_text</td><td>VARCHAR(200) NOT NULL</td><td>일시 원문, 빈 문자열 금지(API 검증)</td></tr>
+<tr><td>service_text</td><td>VARCHAR(200) NOT NULL</td><td>대상 업무, 빈 문자열 허용</td></tr>
+<tr><td>reason_text</td><td>VARCHAR(200) NOT NULL</td><td>사유, 빈 문자열 허용</td></tr>
+<tr><td>window_start</td><td>DATETIME NULL</td><td>초 단위 KST(+09:00) 시작 시각, 미확인·반복 일정은 NULL</td></tr>
+<tr><td>window_end</td><td>DATETIME NULL</td><td>초 단위 KST(+09:00) 종료 시각, 미확인·반복 일정은 NULL</td></tr>
+<tr><td>dedup_hash</td><td>CHAR(64) UNIQUE</td><td>사유 제외 5개 값의 SHA-256. 삭제 후에도 유지</td></tr>
+<tr><td>crt_dt</td><td>DATETIME NOT NULL</td><td>최초 등록 시각 KST(+09:00)</td></tr>
+<tr><td>up_dt</td><td>DATETIME NOT NULL</td><td>명시적 변경·삭제·수동 복원 시각 KST(+09:00)</td></tr>
+<tr><td>del_dt</td><td>DATETIME NULL</td><td>삭제 시각 KST(+09:00). NULL이면 정상 공지</td></tr></tbody></table></div>
+<p class="note"><strong>시간대와 정밀도:</strong> 다섯 DATETIME 컬럼은 모두 한국시각(KST, +09:00) 초 단위 <code>DATETIME</code>(<code>DATETIME(0)</code>과 동일)입니다. API는 시작·종료 및 조회 경계에 0이 아닌 소수 초가 오면 거부하며 반올림하지 않습니다. 생성·수정·삭제 시각도 소수점 없이 반환합니다. DATETIME 자체는 시간대 정보를 담지 않으므로 API의 모든 DB 연결도 +09:00으로 설정합니다.</p>
+<p class="note"><strong>문자열 비교:</strong> 일반 문자열 컬럼은 <code>utf8mb4_unicode_ci</code>를 사용합니다. 중복 판정은 API가 대소문자를 통일한 5개 값으로 계산한 해시와 <code>dedup_hash</code>의 UNIQUE가 담당합니다. 이 해시 컬럼의 <code>ascii_bin</code>은 유지합니다. SQL collation의 악센트 비교와 해시의 동일성 규칙은 완전히 같지 않으므로 SQL 문자열 비교만으로 중복을 확정하지 않습니다.</p>
+<details><summary>최종 DDL 전체 · 컬럼 COMMENT 포함</summary><pre><code id="ddl">-- SiteCheck final design: one MySQL 8.0+ business table on the primary server.
+-- Different schedule_text identities are separate notices; reason is not an identity field.
+-- Explicit edits are last-applied-write-wins. Manual links live in SiteCheck state files.
+-- The GDS schema must exist before execution. All DATETIME values are KST (+09:00) wall-clock values.
+-- This session setting applies only to this connection; the API must set +09:00 on every DB connection.
+-- The API validates nonempty values, time order and identity; UNIQUE protects duplicate writes.
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+SET SESSION time_zone = '+09:00';
+
+CREATE TABLE `GDS`.`TB_SITE_CHECK` (
+                                 `item_id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '점검 공지 고유번호',
+                                 `check_type` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '점검 구분\n 일반점검 또는 정기점검',
+                                 `institution_code` varchar(10) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '대상 기관 코드',
+                                 `institution_name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '대상 기관명',
+                                 `schedule_text` varchar(200) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '점검 일시 원문\n 실제 일정 또는 정기점검 일정',
+                                 `service_text` varchar(200) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '점검 대상 업무',
+                                 `reason_text` varchar(200) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '점검 사유',
+                                 `window_start` datetime DEFAULT NULL COMMENT '점검 시작 일시\n 미확인 또는 정기점검 일정은 NULL',
+                                 `window_end` datetime DEFAULT NULL COMMENT '점검 종료 일시\n 미확인 또는 정기점검 일정은 NULL',
+                                 `dedup_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '공지 중복 식별값\n 구분 및 기관코드 및 기관명 및 일시 및 업무의 구분값 삭제 후에도 유지',
+                                 `crt_dt` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '최초 등록 일시',
+                                 `up_dt` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '최초 변경 일시',
+                                 `del_dt` datetime DEFAULT NULL COMMENT '삭제 일시\n NULL이면 정상 공지',
+                                 PRIMARY KEY (`item_id`),
+                                 UNIQUE KEY `uq_site_check_dedup_hash` (`dedup_hash`),
+                                 KEY `ix_site_check_live_id` (`del_dt`,`item_id`),
+                                 KEY `ix_site_check_type_end_id` (`check_type`,`del_dt`,`window_end`,`item_id`),
+                                 KEY `ix_site_check_type_org_id` (`check_type`,`institution_code`,`item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='기관별 점검 공지';</code></pre></details>
+<p class="warning">현재 DDL의 <code>up_dt</code> COMMENT는 “최초 변경 일시”이지만, 실제 API는 생성 후 명시적 수정·삭제·수동 복원 때마다 이 값을 갱신합니다. 테이블 적용 전 COMMENT를 실제 의미에 맞게 확정해야 합니다.</p>
+<h3>조회 성능과 무결성</h3>
+<p><code>(check_type, del_dt, window_end, item_id)</code> 인덱스는 구분·미삭제 조건 다음에 종료 범위를 비교하는 조회를 고려했습니다. 종료 시각에 함수를 씌우지 않고 KST로 변환한 경계 값과 직접 비교합니다. 구분 없는 종료 범위 단독 조회까지 최적화한 인덱스는 아닙니다.</p>
+<pre><code>-- 일반점검: 종료 기준 범위 조회
+SELECT item_id, check_type, institution_code, institution_name,
+       schedule_text, service_text, reason_text,
+       window_start, window_end, crt_dt, up_dt
+FROM GDS.TB_SITE_CHECK
+WHERE check_type = '일반점검'
+  AND del_dt IS NULL
+  AND window_end &gt;= :from_kst
+  AND window_end &lt; :to_kst
+ORDER BY window_end, item_id;
+
+-- 정기점검: 종료 조건 없이 구분으로 조회
+SELECT item_id, schedule_text, window_start, window_end
+FROM GDS.TB_SITE_CHECK
+WHERE check_type = '정기점검' AND del_dt IS NULL;</code></pre>
+<p>API 목록은 ID 내림차순을 사용하므로 종료 범위와 함께 쓰면 추가 정렬이 필요할 수 있습니다. 실제 데이터로 EXPLAIN을 확인해야 합니다. 후보 조회는 구분·기관코드 인덱스 후 API에서 식별 정규화한 구분·기관코드·일시를 다시 비교하며, 여러 페이지를 끝까지 확인합니다.</p>
+<p class="note">Application에서 후보 판정과 UX를 담당하고 API에서 중복·연결·필수값·기간 순서를 재검증합니다. DB의 UNIQUE는 동시에 같은 공지가 저장되는 것을 막습니다. NOT NULL만으로 빈 문자열·잘못된 구분·기간 역전이 막히지는 않으므로 업무 쓰기는 API로 제한합니다.</p>
+<p>수정 시각은 API가 명시적으로 갱신합니다. 소프트 삭제한 키도 UNIQUE에 남으므로 중복 등록이 차단됩니다. <code>version</code>이 없어도 트랜잭션·행 잠금은 필요하지만 오래된 담당자 수정의 덮어쓰기 자체는 허용합니다.</p></section>
+<section class="section" id="project"><div class="section-head"><div class="section-no">SECTION 05</div><h2>프로젝트 작업</h2></div>
+<p>상세 구현 순서와 테스트는 <a href="sitecheck-implementation-handoff.md">SiteCheck 프로젝트 작업 명세</a>를 참조합니다. SiteCheck 측 API 클라이언트와 엑셀 연동은 구현했고 모의 API 테스트를 통과했습니다. 실제 API 서버·DB 연결 및 운영 검증은 남아 있습니다.</p>
+<div class="table-wrap"><table><thead><tr><th>작업</th><th>구현 내용</th></tr></thead><tbody><tr><td>공통 저장 서비스</td><td>최종 엑셀 6개 값 구성 → 입력 식별 값 보관 → 연결/정확 중복 확인 → 후보 판단 → 저장 API → 반환된 DB 값으로 엑셀 반영</td></tr>
+<tr><td>수집 연결</td><td>CLI와 웹 수집에서 동일 서비스 사용. 시각은 수집 단계부터 유지하고 XLSX 원문만으로 임의 추정하지 않음</td></tr>
+<tr><td>검토 페이지 추가</td><td>단건 POST 연결. 일시 필수 검증과 후보 비교를 적용하고 기존 기관코드+사유 중복 규칙을 교체</td></tr>
+<tr><td>담당자 수정</td><td>itemId를 유지해 PATCH. 다른 일시로의 수정은 신규 등록 + 이전 건의 선택적 삭제로 안내</td></tr>
+<tr><td>엑셀 행 삭제</td><td>행-ID 매핑으로 DELETE. 삭제 성공 후 로컬 파일 반영. 탐지 후보 삭제·파일 삭제·실행 기록 삭제와 구분</td></tr>
+<tr><td>연결·대기 상태</td><td>환경별 로컬 파일에 연결/신규 허용/보류와 미완료 작업 저장. 프로세스 간 잠금·원자적 저장·백업 적용</td></tr>
+<tr><td>장애 처리</td><td>API 반영 후 파일 저장 실패 등 단계별 상태 기록. 실패를 성공처럼 표시하지 않으며 과거 PATCH의 지연 자동 재전송 금지</td></tr>
+<tr><td>최초 적재</td><td>가장 최신 엑셀 파일 하나만. 이전 날짜 파일 자동 순회·기존 DB 값의 강제 덮어쓰기 없음</td></tr></tbody></table></div>
+<p>기관명·업무 수정 전에는 변경 전 식별 값과 대상 ID를 미완료 작업으로 먼저 기록하고, PATCH 성공 후 연결 기록을 확정합니다. 엑셀을 DB 값으로 바꾸기 전에 최초 수집 입력도 보관해야 다음 수집의 같은 입력을 연결할 수 있습니다.</p>
+<p>현재 구현은 엑셀의 보이는 B:G 여섯 열은 그대로 두고 숨긴 H열에 API <code>itemId</code>를 보관합니다. 연결·보류 결정은 <code>output/state/{environment}/notice_state.json</code>에 저장하며 테스트/운영 상태를 분리합니다. 실제 API 서버 연결은 주소·인증 정보 전달 후 검증합니다.</p>
+<h3>프론트 및 타팀 전달</h3>
+<ul class="plain-list"><li>프론트 구현은 별도 담당자 범위입니다. 비교 후보·보류 사유·행-ID·입력 식별 값과 LINK/NEW/HOLD 결정 정보를 전달해야 합니다.</li><li>일반점검 종료 조건과 정기점검 구분 조건을 분리합니다. 종료된 공지를 화면에서 숨겨도 DB에서는 삭제하지 않습니다.</li><li>타팀 DB 계정은 SELECT 전용입니다. <code>del_dt IS NULL</code>, KST(+09:00) 시각, 반복 일정의 NULL 처리, <code>check_type</code> 값을 전달합니다.</li><li>복원은 del_dt 해제와 up_dt 갱신으로 수행합니다. 복원 전에 남아 있는 삭제 재시도 작업을 정리해야 다시 삭제되지 않습니다.</li></ul></section>
+<section class="section" id="api"><div class="section-head"><div class="section-no">SECTION 06</div><h2>API 구현</h2></div>
+<p>요청·응답 필드와 검증 규칙의 기준 문서는 <a href="sitecheck-api-spec.md">외부 API 구현 명세</a>입니다. 기본 경로는 <code>/api/v1/site-check-items</code>입니다.</p>
+<div class="table-wrap"><table><thead><tr><th>Method</th><th>하위 경로</th><th>역할</th></tr></thead><tbody><tr><td>POST</td><td>:lookup</td><td>입력 5개 값으로 정확한 공지 조회</td></tr>
+<tr><td>GET</td><td>기본 경로</td><td>목록 및 같은 구분·기관·일시 후보 조회</td></tr>
+<tr><td>GET</td><td>/{itemId}</td><td>상세 조회와 연결 상태 확인</td></tr>
+<tr><td>POST</td><td>:import</td><td>승인된 행 일괄 저장 또는 기존 연결</td></tr>
+<tr><td>POST</td><td>기본 경로</td><td>검토에서 결정된 단건 저장 또는 기존 연결</td></tr>
+<tr><td>PATCH</td><td>/{itemId}</td><td>명시적 수정. 일시 식별 값 변경은 신규 등록 필요</td></tr>
+<tr><td>DELETE</td><td>/{itemId}</td><td>소프트 삭제. 복원 API 없음</td></tr></tbody></table></div>
+<h3>일괄 저장의 성공 행별 결과</h3>
+<div class="table-wrap"><table><thead><tr><th>status</th><th>뜻</th></tr></thead><tbody><tr><td>INSERTED</td><td>새 공지 저장</td></tr>
+<tr><td>EXISTING</td><td>같은 5개 값·대소문자 통일 후 같은 사유. 기존 전체 값 사용</td></tr>
+<tr><td>REASON_PRESERVED</td><td>같은 5개 값·대소문자 통일 후에도 다른 사유. 기존 전체 값 사용</td></tr>
+<tr><td>LINKED_EXISTING</td><td>다른 5개 키지만 검증된 수동 연결 대상의 기존 값 사용</td></tr>
+<tr><td>SUPPRESSED_DELETED</td><td>삭제된 정확 키 또는 유효한 연결 대상. 재등록·복원 금지</td></tr></tbody></table></div>
+<p class="warning">행별 CONFLICT 상태는 없습니다. 해시 충돌·잘못된 연결·입력 오류는 배치 전체 롤백입니다. <code>DUPLICATE_IDENTITY</code>는 PATCH의 식별키 충돌이며, 연결 오류는 <code>IDENTITY_ALREADY_ASSIGNED</code> 또는 <code>LINK_TARGET_CHANGED</code>로 구분합니다.</p>
+<p>후보 조회는 SiteCheck의 사람 판단을 지원합니다. API의 신규 POST는 호출부에서 신규 등록을 결정한 명령으로 처리하되, 정확한 키 중복은 매번 재검사합니다. 후보의 존재만으로 API가 신규를 거부하지는 않습니다.</p>
+<p>명시적 PATCH는 최신 잠금 행에 전달된 필드만 병합합니다. 동일한 최종 원문과 시각이면 NO_CHANGE, 다르면 UPDATED입니다. 정규화 키는 같아도 저장 원문이 달라지면 변경입니다. <code>version</code>은 요청하지 않습니다.</p></section>
+<section class="section" id="delivery"><div class="section-head"><div class="section-no">SECTION 07</div><h2>진행 순서</h2></div>
+<div class="table-wrap"><table><thead><tr><th>순서</th><th>담당</th><th>해야 할 일 / 완료 조건</th></tr></thead><tbody><tr><td>1. DB 준비</td><td>사용자 + API 프로젝트</td><td>사용자가 DB 주소·포트·스키마·계정·접속 조건을 API 프로젝트에 직접 전달. 실제 구조 확인 후 DDL 또는 마이그레이션으로 테이블 준비</td></tr>
+<tr><td>2. API 구현</td><td>별도 API 프로젝트</td><td>외부 API 명세에 따라 7개 API·정규화·트랜잭션·권한·검증을 구현하고 실제 MySQL 테스트</td></tr>
+<tr><td>3. 테스트 접속정보 전달</td><td>API 프로젝트 → 사용자 → SiteCheck</td><td>테스트 Base URL, 인증 전달 방법, 접속 조건, 배포 버전 제공. DB 비밀번호는 SiteCheck에 전달하지 않음</td></tr>
+<tr><td>4. SiteCheck 연동</td><td>이 프로젝트</td><td>공통 서비스·상태 파일·수집/검토/수정/삭제 연동과 최초 적재 기능 구현. 프론트 담당자에게 결정 화면 계약 전달</td></tr>
+<tr><td>5. 통합 검증</td><td>관련 담당자</td><td>중복·담당자 수정 보존·연결·일시 변경·삭제·재시도·엑셀 일치 확인</td></tr>
+<tr><td>6. 운영 전환</td><td>사용자 + API 프로젝트</td><td>운영 Base URL과 접근 권한 확정. 환경별 상태 분리·백업, 최신 파일 적재 결과, 타팀 SELECT 검증</td></tr></tbody></table></div>
+<p class="note"><strong>DB 정보 전달 예정:</strong> 이 문서에는 실제 주소·계정·비밀번호를 넣지 않습니다. API 프로젝트가 사용자가 전달한 정보를 비밀 설정으로 관리합니다. 테스트·운영 API 주소는 구현·배포 완료 후 회신받을 항목이며 현재 확정된 URL은 없습니다.</p>
+<p>이미 테이블이 있다면 삭제 후 재생성하지 않습니다. SHOW CREATE TABLE/SHOW INDEX로 실제 구조를 확인하고, 기존 다섯 시각 컬럼에 소수 초 데이터가 있는지 조사한 뒤 DATETIME(0)으로 마이그레이션합니다. MySQL 변환 과정의 반올림 결과를 무심코 받아들이지 않습니다.</p></section>
+<section class="section" id="acceptance"><div class="section-head"><div class="section-no">SECTION 08</div><h2>검증과 한계</h2></div>
+<div class="table-wrap"><table><thead><tr><th>검증 시나리오</th><th>기대 결과</th></tr></thead><tbody><tr><td>어제·오늘·동시 수집에서 동일 5개 값</td><td>DB 한 행</td></tr>
+<tr><td>업무 A사이트 점검 / a사이트 점검</td><td>동일 해시와 ID, 기존 원문 유지</td></tr>
+<tr><td>사유 A → B 수정 후 A 재수집</td><td>동일 ID와 B 유지</td></tr>
+<tr><td>업무 수정 또는 수동 연결 후 재수집</td><td>로컬 연결 + API 재검증으로 기존 수정값 유지</td></tr>
+<tr><td>일시 00~06 → 00~07</td><td>새 공지 등록, 이전 공지는 담당자 삭제 전까지 유지</td></tr>
+<tr><td>삭제 후 정확 키 또는 연결 입력 재수집</td><td>재등록 없음</td></tr>
+<tr><td>프로세스 재시작 / 파일 저장 실패</td><td>연결 유지와 미완료 작업 복구. API 성공을 중복 신규로 만들지 않음</td></tr>
+<tr><td>마지막 수정·동시 삭제</td><td>마지막 반영 값 유지, 삭제된 행의 자동 복원 없음</td></tr>
+<tr><td>일시 원문 누락 / 시작 > 종료</td><td>저장 거부 후 보완 안내</td></tr>
+<tr><td>시작·종료 또는 조회 경계의 0이 아닌 소수 초</td><td>422, 저장 전 거부. .000000은 허용하고 응답에는 소수점 없음</td></tr>
+<tr><td>같은 초에 두 번 명시적 수정</td><td>up_dt가 같을 수 있어도 마지막 DB 반영 내용을 현재값으로 사용</td></tr>
+<tr><td>정기점검 시각 NULL / 종료된 공지</td><td>NULL 저장 가능. 종료되어도 DB 보관</td></tr>
+<tr><td>보류 / 초기 적재</td><td>보류는 DB 미저장, 최초에는 최신 파일 하나만 사용</td></tr></tbody></table></div>
+<h3>유연성과 남는 한계</h3>
+<p>단일 테이블과 nullable 시각은 현재 요구에 충분하고 구분별 조회도 단순합니다. 다만 수정 전 내용·마지막 수집 시각·담당자별 변경 경로는 복원할 수 없습니다. 후보 판정은 완전 자동이 아니며, 로컬 연결 상태가 보존되어야 담당자 결정이 재사용됩니다.</p>
+<p>원문 표기 차이에 대한 유사도 병합, 여러 운영 호스트의 상태 공유, 별도 서버 복제, 수정 이력, 구분 없는 종료 단독 조회 최적화는 향후 요구가 생길 때 추가 설계합니다. 성능은 실제 데이터 양·분포·정렬 조합으로 확인해야 하며 현재 문서만으로 보장하지 않습니다.</p>
+<h3>코드 근거와 검증 범위</h3>
+<p><a href="../src/excel_writer.py">excel_writer.py</a>의 행 생성·이월 병합, <a href="../src/webserver.py">webserver.py</a>의 write_excel 호출 및 update_excel_rows/delete_excel_rows/append_excel_row, <a href="../src/main.py">main.py</a>의 CLI 생성 호출, <a href="../src/carryover.py">carryover.py</a>의 최신 파일·활성 판정을 기준으로 작성했습니다.</p>
+<p class="plain-note">현재 산출물은 보고서·SiteCheck 작업 명세·외부 API 구현 명세와 부속 DDL입니다. 실제 업무 코드 변경, DB 접속·생성, API 구현·배포, 통합 테스트는 아직 수행하지 않았습니다.</p></section>
+<footer class="footer"><span>SiteCheck · 최종본 1.3 · 2026-09-28<br>이 보고서와 두 작업 명세가 이전 다중 서버 설계 및 0.x 명세를 대체합니다.</span><a href="#summary">처음으로</a></footer>
+</article></main></div>
+</body></html>

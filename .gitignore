@@ -13,3 +13,6 @@ logs/
 
 # Claude Code 로컬 설정
 .claude/settings.local.json
+
+# pytest 캐시
+.pytest_cache/
