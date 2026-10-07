@@ -1,4 +1,4 @@
-"""Step 1 — 정규화·식별 해시 (docs/sitecheck-api-spec.md §4, 2026-09-28 개정판).
+"""정규화·식별 해시 — 저장 API 명세 §4(2026-09-28 개정판, dashboard-server docs/SITECHECK_API_HANDOFF.md 참조)와 바이트 단위 일치.
 
 구현 대상: src/notice_identity.py
   FIELDS, CHECK_TYPES, norm_text(), norm_identity(), identity_hash(), identity_from_cells(), notice_key()

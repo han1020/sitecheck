@@ -482,10 +482,10 @@ set -a; . /etc/sitecheck/api.env; set +a   <span class="c"># 설정 파일의 �
 .venv/bin/python -m src.notice_live_smoke     <span class="c"># 정기점검 11건 FOUND · 후보 GET OK</span></code></pre>
   <h3>참조 문서 (저장소 안)</h3>
   <ul class="tight">
-    <li><code>deploy/DEPLOY.md</code> — 설치 절차 전체, 8절에 188 Docker 구성·타이머·코드 반영·50 서버 정리</li>
-    <li><code>docs/sitecheck-integration-test.md</code> — 저장 API 연동 검증 기록 (10-01 종단 간 19개, 10-07 운영 API 확인)</li>
-    <li><code>docs/sitecheck-api-spec.md</code>, <code>docs/sitecheck-implementation-handoff.md</code>, <code>docs/sql/site_check_item.mysql.sql</code> — API 계약·작업 명세·DDL (1.3)</li>
+    <li><code>deploy/DEPLOY.md</code> — 설치 절차 전체, 8절에 188 Docker 구성·타이머·코드 반영·50 서버 정리·이 가이드 안내</li>
+    <li><code>docs/sql/site_check_item.mysql.sql</code>, <code>docs/sql/regular_maintenance_seed.mysql.sql</code> — DB 테이블 DDL, 정기점검 11행 초기 데이터</li>
     <li><code>README.md</code> "DB 저장 API 연동" 절 — 환경변수 표와 동작 요약</li>
+    <li>저장 API 계약·검증 결과는 API 프로젝트(dashboard-server)의 <code>docs/SITECHECK_API_HANDOFF.md</code>에 있다</li>
   </ul>
 </section>
 
