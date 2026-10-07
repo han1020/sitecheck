@@ -5,7 +5,7 @@
 
 현재 Python 수집·엑셀 프로젝트에 저장 API 연동, 수동 연결/보류의 로컬 상태, 엑셀 편집·삭제 연동을 추가한다. 전체 시스템 DB 전환은 아니다. 타팀은 184의 GDS.TB_SITE_CHECK 테이블을 조회한다.
 
-- 종합 보고서: [sitecheck-project-analysis.html](sitecheck-project-analysis.html)
+- 운영 가이드(운영 담당 전달용): [sitecheck-operations-guide.html](sitecheck-operations-guide.html)
 - 별도 API 프로젝트 계약: [sitecheck-api-spec.md](sitecheck-api-spec.md)
 - API 프로젝트가 적용할 DDL: [site_check_item.mysql.sql](sql/site_check_item.mysql.sql)
 - DB 주소·계정·스키마·접속 조건은 사용자가 API 프로젝트에 직접 전달한다. 이 프로젝트는 DB에 직접 연결하지 않는다.

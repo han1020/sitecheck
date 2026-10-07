@@ -3,9 +3,10 @@
 사이트 점검 수집 웹 대시보드(`serve.py`)를 리눅스 서버에 상주 실행하는 방법입니다.
 경로/계정은 예시(`/opt/siteCheck`, `sitecheck`)이니 환경에 맞게 바꾸세요.
 
-188 서버(Ubuntu 22.04)에서는 systemd 방식을 사용합니다. 웹 포트는 9095이고,
-별도 저장 API는 `http://<API 서버 IP>:9092`입니다. 포트 9092를 웹 포트로 사용하지 마세요.
-Git에서 코드를 받는다면 DB 연동 파일까지 포함된 배포용 커밋을 먼저 준비해야 합니다.
+188 서버(Ubuntu 22.04, `/root/achee7059/siteCheck`)에서는 웹·수집을 **Docker 컨테이너**로 돌립니다(8절).
+이 노드는 Docker가 publish한 포트만 밖에서 열리고 호스트 프로세스 포트는 막혀 있어서, 1~4절(venv·환경파일·연결 확인)만 호스트에서 하고
+5·7절의 호스트 systemd 유닛은 쓰지 않습니다. 웹 포트는 9095이고, 별도 저장 API는 `http://<API 서버 IP>:9092`입니다.
+포트 9092를 웹 포트로 사용하지 마세요. Git에서 코드를 받는다면 DB 연동 파일까지 포함된 배포용 커밋을 먼저 준비해야 합니다.
 
 ---
 
@@ -91,7 +92,7 @@ sudo -u sitecheck bash -c '
 `notice_api`의 빈 lookup이 성공해야 URL·인증·기본 응답이 정상입니다.
 운영 API의 후보/상세 GET을 확인하기 전에는 `지금 수집`이나 타이머를 실행하지 마세요.
 
-## 5. systemd 서비스 등록
+## 5. systemd 서비스 등록 (venv 방식 — 188에서는 8절의 Docker 구성을 사용)
 
 ```bash
 # 서비스 파일 복사 (먼저 User/경로/포트를 환경에 맞게 편집)
@@ -145,7 +146,7 @@ server {
 
 ---
 
-## 7. 자동 주기 수집 (매주 화/금 10:00·14:00) — systemd timer
+## 7. 자동 주기 수집 (매주 화/금 10:00·14:00) — systemd timer (venv 방식 — 188은 8절)
 
 웹의 `지금 수집` 버튼을 사람이 누르지 않아도, 정해진 시각에 자동 수집되게 합니다.
 `collect.py`는 웹의 '지금 수집'과 동일 파이프라인이라 결과가 **감지 목록 + 엑셀뷰** 양쪽에
@@ -190,7 +191,86 @@ journalctl -u sitecheck-collect.service -f       # 수집 로그
 
 ---
 
-## 정리: 등록되는 systemd 유닛
+## 8. 188 서버 실제 구성 (Docker) — 타이머 전환 · 코드 반영 · 50 서버 정리
+
+2026-10 기준 188 서버의 구성이다. 환경값은 `/etc/sitecheck/api.env`(3절) 하나이고, 모든 `docker compose` 명령에
+`--env-file /etc/sitecheck/api.env`로 넘긴다(저장소 안에 `.env`를 두지 않는다). `docker-compose.yml`이
+`./config`·`./output`·`./logs`를 볼륨으로 쓰므로 엑셀·감지 이력·`output/state/production/`(수동 연결 결정)은 호스트에 남는다.
+
+| 구성 | 값 |
+|------|----|
+| 설치 경로 | 현재 `/root/achee7059/siteCheck` (root 실행). **바뀔 수 있으니** 작업 전 확인: `docker inspect sitecheck-web --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}'` 또는 `grep WorkingDirectory /etc/systemd/system/sitecheck-collect.service`. 아래 명령은 `SC` 변수를 쓴다 |
+| 웹 대시보드 | `docker compose --env-file /etc/sitecheck/api.env up -d web` → 0.0.0.0:9095 (`restart: unless-stopped`) |
+| 수집 | `sitecheck-collect.timer` → `sitecheck-collect.service` → `docker compose … run --rm collect` (`deploy/docker/` 유닛) |
+| 점검용 | 호스트 `.venv` (4절의 `notice_api`·`notice_live_smoke`) |
+
+### 8-1. 타이머 전환 (최초 적재가 끝난 뒤)
+
+`deploy/docker/sitecheck-collect.service`는 `/opt/siteCheck` 기준이라 경로와 `--env-file`을 넣어 복사한다. 한 줄씩 실행한다.
+
+```bash
+SC=/root/achee7059/siteCheck          # 현재 설치 경로 — 바뀌었으면 이 줄만 고친다
+timedatectl | grep "Time zone"        # Asia/Seoul 이 아니면: timedatectl set-timezone Asia/Seoul
+which docker                          # 유닛의 ExecStart 경로(/usr/bin/docker)와 같아야 함
+cd "$SC"
+sed -e "s#/opt/siteCheck#$SC#g" -e 's#docker compose run --rm collect#docker compose --env-file /etc/sitecheck/api.env run --rm collect#' deploy/docker/sitecheck-collect.service > /etc/systemd/system/sitecheck-collect.service
+cp deploy/docker/sitecheck-collect.timer /etc/systemd/system/
+grep -n -E 'WorkingDirectory|ExecStart' /etc/systemd/system/sitecheck-collect.service
+systemctl daemon-reload
+systemctl start sitecheck-collect.service        # 수동 1회 (수 분). 끝에 '수집 완료 … | 점검 API 동기화: {...}', 'DB 동기화 오류' 없어야 함
+journalctl -u sitecheck-collect.service -n 40 --no-pager
+systemctl enable --now sitecheck-collect.timer   # 화·금 10:00·14:00
+systemctl list-timers sitecheck-collect.timer --no-pager
+```
+
+호스트 방식 유닛이 남아 있으면 먼저 지운다: `systemctl disable --now sitecheck-web; rm -f /etc/systemd/system/sitecheck-web.service`.
+확인: 대시보드 상태줄에 `DB 저장 n · 판단 필요 n · DB 오류 0`, `list-timers`의 NEXT가 다음 화/금 10:00·14:00(KST).
+
+### 8-2. 코드 수정 후 반영
+
+컨테이너는 이미지 안의 코드를 쓰므로 `git pull`만으로는 바뀌지 않는다. 빌드 후 웹을 재기동하면 되고, 타이머는 다음 실행부터 새 이미지를 쓴다.
+
+```bash
+SC=/root/achee7059/siteCheck          # 현재 설치 경로 — 확인 후 수정
+cd "$SC"
+git pull
+docker compose build                                            # requirements·Dockerfile 변경 시 수 분, 아니면 캐시로 빠름
+docker compose --env-file /etc/sitecheck/api.env up -d web      # 새 이미지로 웹 교체
+docker compose ps && docker compose logs --tail 5 web
+```
+
+- `config/*.yaml`만 바꾼 경우: 볼륨이라 빌드 불필요. 대시보드 편집은 즉시, 파일 직접 편집은 다음 수집부터 반영
+- 유닛 파일(`deploy/docker/*.service`, `*.timer`)을 바꾼 경우: 8-1의 `sed`/`cp` 다시 실행 후 `systemctl daemon-reload`
+- 수집 중(상태줄 `수집 중…`)에는 `up -d web`을 미룬다 — 컨테이너 교체로 그 회차가 끊긴다
+- 되돌리기: `git checkout <이전 커밋>` 후 같은 절차. 엑셀 전용으로 긴급 롤백하려면 `docker compose up -d web`(env-file 없이 → API 미설정)과 타이머 유닛의 `--env-file` 제거 후 `daemon-reload`
+
+### 8-3. 50 서버 내리기 (188 병행 운영 일주일 뒤)
+
+188의 자동 수집이 화·금 두 번 이상 정상(`DB 동기화 오류` 없음, 엑셀·감지목록 갱신)이면 50을 내린다.
+**50의 `config/`·`output/`을 다시 188로 복사하지 않는다** — 188의 엑셀에는 숨긴 H열 itemId와 `output/state/`가 생겨 있어 덮어쓰면 꼬인다.
+병행 기간의 편집(엑셀뷰·키워드·정기점검·스킵)은 188에서만 한다.
+
+```bash
+# [50 서버]
+sudo systemctl disable --now sitecheck-collect.timer
+sudo systemctl disable --now sitecheck-web
+systemctl list-timers sitecheck-collect.timer       # 비어 있어야 함
+sudo tar czf /root/sitecheck-50-final-$(date +%Y%m%d).tgz -C /opt/siteCheck config output   # 보관용 (선택)
+```
+
+확인: 50의 9095/8000 포트가 닫혔고, 사내 안내(대시보드 주소)를 188로 바꿨는지. 50의 서비스 파일은 남겨 둬도 무방하다.
+
+### 8-4. 운영 가이드 (`docs/sitecheck-operations-guide.html`)
+
+운영 담당자에게 전달하는 문서다. 코드 수정→커밋·푸시→188 반영 절차, 타이머 다루기, DB 저장 방식(식별값·상태·판단 필요·소프트 삭제), 화면 조작, 주간 점검, 문제 해결, `api.env` 양식을 개발 지식이 없는 사람 기준으로 적었다.
+
+- 단일 HTML 파일이라 브라우저에서 바로 열린다(더블클릭). 사내 공유는 파일을 보내거나 웹 공유 링크를 따로 전달한다.
+- 절차·경로·포트가 바뀌면 이 문서의 8절과 가이드 HTML을 **함께** 고치고 커밋한다. 가이드의 명령은 설치 경로를 `$SC` 변수로 쓰므로 경로가 바뀌어도 본문 수정은 최소다.
+- 운영 주소·계정은 가이드에도 자리표시자(`<API 서버 IP>`, `<서비스 계정>`)만 둔다. 실제 값은 188 서버의 `/etc/sitecheck/api.env`에만 있다.
+
+---
+
+## 정리: 등록되는 systemd 유닛 (venv 방식. 188 Docker 구성은 `sitecheck-collect.timer`/`.service`만 등록, 웹은 compose `restart: unless-stopped`)
 
 | 유닛 | 역할 | enable 대상 |
 |------|------|-------------|
