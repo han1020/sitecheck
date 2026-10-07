@@ -7,7 +7,7 @@
 
 **DB 주소·포트·스키마·계정·비밀번호·접속 조건은 사용자가 API 구현 프로젝트에 직접 전달할 예정이다.** 이 저장소나 문서에 비밀값을 기록하지 않는다. API 구현 프로젝트는 제공받은 정보를 비밀 설정으로 관리하고 테스트·운영 API Base URL, 인증 방법, 배포 버전과 접속 조건을 사용자에게 회신한다. SiteCheck에는 DB 자격증명이 아니라 API 접속 정보만 전달한다.
 
-이 저장소의 SiteCheck 측 API 클라이언트와 엑셀 연동은 구현했다. 별도 프로젝트의 실제 DB 생성·API 구현·배포 상태는 이 저장소에서 확인하지 못했고, 실제 서버 연결 테스트도 아직 수행하지 않았다. 세부 역할은 [SiteCheck 작업 명세](sitecheck-implementation-handoff.md), 전체 결정은 보고서를 함께 참조한다.
+이 저장소의 SiteCheck 측 API 클라이언트와 엑셀 연동은 구현했다. 별도 프로젝트(dashboard-server)는 이 명세대로 API를 구현해 2026-10-01 운영 MySQL 왕복 검증(84개 검사)을 마쳤고, 같은 날 SiteCheck가 운영 DB에 연결된 로컬 API로 종단 간 19개 검사를 통과했다. 2026-10-07 운영 API 서버(9092)에 배포된 것을 읽기 전용으로 확인했다(`sitecheck-integration-test.md`). 세부 역할은 [SiteCheck 작업 명세](sitecheck-implementation-handoff.md), 운영 절차는 [운영 가이드](sitecheck-operations-guide.html)를 함께 참조한다.
 
 ## 2. 확정 정책
 
