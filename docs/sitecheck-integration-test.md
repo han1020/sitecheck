@@ -76,7 +76,7 @@ Base URL 끝에 `/api/v1/site-check-items`를 붙이지 않는다. 웹 서버와
 | S12 | 삭제된 공지 재수집 → `suppressed=1`, 행 제거, `saved=0`, 재등록 없음 | 통과 |
 | S13 | 상태 파일 `pendingOperations` 비어 있음 (decisions 3건) | 통과 |
 
-남은 시험 데이터(소프트 삭제, 타팀 조회 `del_dt IS NULL`에는 보이지 않음): itemId 46(`TST4ACB5AA`), 47·48(`TST4FA6AE4`). 물리 삭제는 DB 담당자가 `DELETE FROM GDS.TB_SITE_CHECK WHERE institution_code LIKE 'TST%';`로 수행한다.
+시험 데이터(itemId 46~49, `TST*`)는 소프트 삭제 상태로 남아 있었고, 2026-10-07 운영 API 상세 조회(`includeDeleted=true`)에서 404로 확인되어 물리 삭제가 끝났다. 이후 시험 행이 생기면 DB 담당자가 `DELETE FROM GDS.TB_SITE_CHECK WHERE institution_code LIKE 'TST%';`로 정리한다.
 
 확인된 주의점: 대상이 맞지 않는 LINK 결정이 상태 파일에 남아 있으면(S8) 매 동기화마다 그 행이 `errors`에 들어간다. 복구는 엑셀뷰 **DB 동기화** 결과의 판단 필요 행에서 보류·별도 신규·다른 연결을 다시 선택하는 것이다.
 
@@ -85,5 +85,7 @@ API 장애 시나리오(2026-10-01, 가짜 수집 + 임시 출력 경로로 `_co
 검증하지 않은 항목: 상태 파일 손상·쓰기 실패, API 성공 후 파일 실패, PATCH 결과 불명(장애 주입이 필요해 `tests/`의 FakeApi로만 확인), 운영 최신 엑셀 한 파일의 최초 적재, `serve.py` HTTP 라우트 자체(라이브러리 함수 수준으로 검증).
 
 ## 6. 운영 전환
+
+2026-10-07: 운영 저장 API(9092)에 SiteCheck 엔드포인트가 배포되어 읽기 전용 확인(health·인증·빈 lookup·후보/상세 GET·정기점검 11건 FOUND)을 통과했다. 188 서버 설치부터의 실행 순서는 `deploy/DEPLOY_188_CHECKLIST.md`를 따른다.
 
 테스트 API와 DB 검증이 끝난 뒤 운영 Base URL·인증·환경 이름(`production` 등)을 별도로 설정한다. 최초 적재는 운영 최신 엑셀 한 파일에만 수행한다. 테스트 상태 파일을 운영 상태로 복사하지 않는다. 타팀에는 `GDS.TB_SITE_CHECK`의 읽기 전용 접근과 `del_dt IS NULL`, KST 시각 해석을 전달한다.
