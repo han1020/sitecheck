@@ -81,9 +81,13 @@ def save_atomic(wb, path: Path) -> None:
 
 
 def resolve_item(api: NoticeApi, state: NoticeState, item: dict[str, Any],
-                 *, action: str | None = None, linked_id: str | None = None) -> dict[str, Any]:
+                 *, action: str | None = None, linked_id: str | None = None,
+                 retry_on_missing: bool = False) -> dict[str, Any]:
+    """retry_on_missing: 호출자가 넘긴 linked_id 가 엑셀 H열처럼 '기억된 번호'일 때 True.
+    사람이 방금 고른 LINK 는 False 로 두어 대상이 없으면 오류를 그대로 올린다."""
     decision = state.decision_for(item)
-    if action is None and decision:
+    from_decision = action is None and decision is not None
+    if from_decision:
         action = decision["action"]
         linked_id = decision.get("itemId")
     if action == "HOLD":
@@ -100,7 +104,17 @@ def resolve_item(api: NoticeApi, state: NoticeState, item: dict[str, Any],
         if not linked_id:
             raise ValueError("LINK 대상 ID가 없습니다.")
         request["linkedItemId"] = str(linked_id)
-    response = api.create(request)
+    try:
+        response = api.create(request)
+    except NoticeApiError as exc:
+        # 연결 대상이 DB에 없음(DB 초기화·물리 삭제로 번호가 바뀜). 기억된 번호만 버리고 처음부터
+        # 다시 판정한다 — 식별값 조회는 그대로 하므로 중복 저장은 생기지 않는다.
+        # 삭제된 공지는 404 가 아니라 SUPPRESSED_DELETED 로 오므로 이 경로와 겹치지 않는다.
+        if action == "LINK" and exc.status == 404 and (from_decision or retry_on_missing):
+            if from_decision:
+                state.forget(item)
+            return resolve_item(api, state, item)
+        raise
     if response["status"] == "LINKED_EXISTING" and not decision:
         state.decide(item, "LINK", str(response["item"]["itemId"]))
     return response
@@ -128,7 +142,8 @@ def sync_workbook(path: Path, api: NoticeApi, state: NoticeState) -> dict[str, A
                 decision = state.decision_for(item)
                 resolved = resolve_item(api, state, item,
                                         action="LINK" if existing_id and not decision else None,
-                                        linked_id=existing_id if existing_id and not decision else None)
+                                        linked_id=existing_id if existing_id and not decision else None,
+                                        retry_on_missing=True)   # H열 번호는 '기억'이라 틀릴 수 있다
                 status = resolved["status"]
                 if status in ("HOLD", "NEEDS_DECISION"):
                     result["held"].append({"excelRow": row, "status": status,

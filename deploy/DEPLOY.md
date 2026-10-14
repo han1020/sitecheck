@@ -32,7 +32,7 @@ sudo -u sitecheck .venv/bin/pip install -r requirements.txt
 최종 `config/`와 `output/`을 188 서버의 동일 경로로 복사하고 `sitecheck` 소유권을 맞춥니다.
 `output/`에는 엑셀·감지 이력·스크린샷·API 연결 상태가 포함됩니다.
 기존 `output/state/`는 **동일한 API DB와 항목 ID를 계속 사용할 때만** 복사합니다.
-새 DB라면 이전 엑셀의 숨긴 H열 ID와 상태 파일을 그대로 사용하지 마세요.
+새 DB라면 이전 엑셀의 숨긴 H열 ID와 상태 파일을 그대로 사용하지 마세요(동기화가 새 DB에 없는 옛 번호를 만나면 자동으로 버리고 다시 저장하지만, 상태 파일은 미리 치워 두는 편이 깔끔합니다).
 
 ## 2. Playwright 브라우저 설치 (★ 빠지면 '지금 수집' 에러)
 

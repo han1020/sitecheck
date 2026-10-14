@@ -97,6 +97,14 @@ class NoticeState:
             data["decisions"].append(entry)
         self._change(update)
 
+    def forget(self, item: dict[str, Any]) -> None:
+        """같은 식별값의 결정을 지운다 (연결 대상이 DB에서 사라져 기억이 틀렸을 때)."""
+        key = identity_hash(item)
+        def update(data: dict[str, Any]) -> None:
+            data["decisions"] = [old for old in data["decisions"]
+                                 if old["inputIdentityHash"] != key]
+        self._change(update)
+
     def begin(self, operation: dict[str, Any]) -> str:
         op_id = uuid.uuid4().hex
         def update(data: dict[str, Any]) -> None:

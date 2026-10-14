@@ -37,6 +37,8 @@ class FakeApi:
         linked = item.get("linkedItemId")
         exact = self.lookup([item])[0]["item"]
         if linked:
+            if linked not in self.items:
+                raise NoticeApiError("대상 공지를 찾을 수 없습니다.", status=404, code="ITEM_NOT_FOUND")
             stored = self.items[linked]
             assert notice_key(stored) == notice_key(item)
             status = "LINKED_EXISTING"
@@ -203,6 +205,51 @@ def test_web_review_append_requires_decision_for_candidate(make_xlsx, tmp_path, 
     linked = webserver.append_excel_row(path.name, changed, action="LINK", linked_id="1")
     assert linked["duplicate"]
     assert len(api.items) == 1
+
+
+def reset_db(api: FakeApi, next_id: int = 100) -> None:
+    """DB 초기화 흉내: 모든 행이 사라지고 번호가 새로 시작한다."""
+    api.items.clear()
+    api.next_id = next_id
+
+
+def test_stale_hidden_id_after_db_reset_is_replaced(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS])
+    sync_workbook(path, api, local)
+    assert sheet_rows(path)[0][6] == "1"
+    reset_db(api)                                       # H열의 1번은 이제 DB에 없다
+    result = sync_workbook(path, api, local)
+    assert result["errors"] == [] and result["saved"] == 1
+    assert sheet_rows(path)[0][6] == "100"              # 새 번호로 교체, 새 행 1개
+    assert len(api.items) == 1
+
+
+def test_stale_link_decision_is_forgotten_after_db_reset(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    sync_workbook(make_xlsx(carried=[CELLS]), api, local)
+    changed = [*CELLS]
+    changed[4] = "다르게 수집된 업무"
+    second = make_xlsx(carried=[changed], name="[사이트점검]_20260924.xlsx")
+    sync_workbook(second, api, local)                   # 후보 → HOLD
+    local.decide(item_from_cells(changed), "LINK", "1")
+    assert sync_workbook(second, api, local)["saved"] == 1
+    reset_db(api)                                       # 결정이 가리키는 1번이 사라짐
+    fresh = make_xlsx(carried=[changed], name="[사이트점검]_20260925.xlsx")
+    result = sync_workbook(fresh, api, local)
+    assert result["errors"] == [] and result["saved"] == 1
+    assert local.decision_for(item_from_cells(changed)) is None   # 틀린 기억은 지워짐
+    assert sheet_rows(fresh)[0][6] == "100"
+
+
+def test_explicit_link_to_missing_item_is_an_error(make_xlsx, tmp_path):
+    import pytest
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx()
+    with pytest.raises(NoticeApiError) as caught:       # 사람이 고른 대상이 없으면 조용히 신규로 바꾸지 않는다
+        append_row(path, CELLS, api, local, action="LINK", linked_id="999")
+    assert caught.value.status == 404
+    assert len(api.items) == 0
 
 
 class DownApi(FakeApi):
