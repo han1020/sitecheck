@@ -67,7 +67,7 @@ python run.py --help               # 옵션 도움말
 
 엑셀에는 6개 업무 열(B:G) 외에 내부 `itemId`를 숨긴 H열로 보관합니다. 기관명·업무를 수정해 입력 식별값이 달라진 경우 `output/state/<환경>/notice_state.json`에 연결 결정을 남깁니다. 이 파일은 임시 실행 기록이 아니므로 DB와 함께 백업해야 합니다. API 응답 불명인 PATCH/DELETE의 대기 작업은 이 파일의 `pendingOperations`에 남고 자동 재실행되지 않습니다. 내용을 확인한 뒤 재동기화 또는 담당자 확인으로 복구하세요.
 
-API에 연결할 수 없으면 엑셀은 그대로 생성되고 상태줄에 "DB 동기화 오류 n건"이 표시되며, 해당 행은 다음 수집에서 다시 전송됩니다(별도 재시도 큐 없음). 동일 키 재수집은 API가 기존 공지와 담당자 수정값을 돌려주고, 다른 일시는 신규 공지로 남깁니다. 같은 구분·기관·일시의 다른 공지 후보는 엑셀뷰의 **DB 동기화** 결과에서 연결·별도 신규·보류를 선택합니다. `window_start/window_end`는 일시 원문에서 파싱하고 불명확한 정기 일정은 `null`로 보냅니다. API 설정 후 수정·삭제·검토 추가는 API 성공 후 엑셀에 반영됩니다.
+수집이 끝나면 엑셀의 최종 행을 **한 번의 `:import` 요청**으로 보냅니다(수집일 `collectionDate`는 엑셀 파일 날짜 = 실행 시작일, KST). 신규가 0건이어도 빈 요청을 보내야 서버가 이전 날짜의 신규 표시(`isNew`)를 해제하므로 항상 보냅니다. **기관 하나라도 수집에 실패하면 그 회차는 DB에 보내지 않고** 상태줄에 "DB 동기화 건너뜀"으로 표시합니다(이전 신규 표시도 그대로). 종료된 일반점검은 보내지 않고(서버가 매일 09:00 물리 삭제), 종료 시각을 알 수 없는 일반점검은 오류 행으로 보고합니다. 엑셀의 노란색(신규)은 서버가 돌려준 `isNew`를 따릅니다. API에 연결할 수 없으면 엑셀은 그대로 생성되고 상태줄에 "DB 동기화 오류 n건"이 표시되며, 해당 행은 다음 수집에서 다시 전송됩니다(별도 재시도 큐 없음). 동일 키 재수집은 API가 기존 공지와 담당자 수정값을 돌려주고, 다른 일시는 신규 공지로 남깁니다. 같은 구분·기관·일시의 다른 공지 후보는 엑셀뷰의 **DB 동기화** 결과에서 연결·별도 신규·보류를 선택합니다. `window_start/window_end`는 일시 원문에서 파싱하고 불명확한 정기 일정은 `null`로 보냅니다. API 설정 후 수정·삭제·검토 추가는 API 성공 후 엑셀에 반영됩니다.
 
 systemd 배포는 `/etc/sitecheck/api.env`를 웹/수집 서비스가 공통으로 읽습니다(파일이 없으면 엑셀 전용). Docker Compose는 호스트 환경변수 또는 Compose `.env`에서 위 값을 전달합니다. 두 방식 모두 인증값과 `output/state/`의 접근 권한을 제한하세요.
 
@@ -106,14 +106,14 @@ python serve.py --host 0.0.0.0 --port 9095   # 사내망 등 외부 접속 허�
 
 ## 리눅스 서버 배포 + 자동 수집
 
-상시 운영(웹 상주 + 화/금 10:00·14:00 자동 수집)은 서버 환경에 따라 두 가지 방식 중 하나로 구성합니다.
+상시 운영(웹 상주 + 화/목 15:00 자동 수집)은 서버 환경에 따라 두 가지 방식 중 하나로 구성합니다.
 
 ### 방식 A — venv + systemd (최신 OS)
 
 Ubuntu 22.04+, Rocky/Alma 9 등 Playwright Chromium이 직접 실행되는 서버용. 자세한 절차는 [`deploy/DEPLOY.md`](deploy/DEPLOY.md) 참고.
 
 - `sitecheck-web.service` — 웹 대시보드 상주 (`serve.py`)
-- `sitecheck-collect.timer` — **매주 화·금 10:00·14:00**(서버 로컬 시간) 트리거. `Persistent=true`로 서버가 꺼져 시각을 놓치면 부팅 후 1회 보충 실행.
+- `sitecheck-collect.timer` — **매주 화·목 15:00**(서버 로컬 시간) 트리거. `Persistent=true`로 서버가 꺼져 시각을 놓치면 부팅 후 1회 보충 실행.
 - `sitecheck-collect.service` — 타이머가 호출하는 1회 수집(`collect.py`). 웹의 '지금 수집'과 동일 파이프라인이라 결과가 감지 목록·엑셀뷰에 바로 반영됩니다.
 
 ### 방식 B — Docker (CentOS 7 등 구형 OS)
@@ -126,11 +126,11 @@ sudo docker compose up -d web        # 웹 대시보드 상주 (restart: unless-
 sudo docker compose run --rm collect # 수집 1회 실행 (타이머가 이 명령을 호출)
 ```
 
-- 스케줄 구조는 방식 A와 동일 — `deploy/docker/`의 timer/service가 화·금 10:00·14:00에 `docker compose run --rm collect`를 실행합니다.
+- 스케줄 구조는 방식 A와 동일 — `deploy/docker/`의 timer/service가 화·목 15:00에 `docker compose run --rm collect`를 실행합니다.
 - `config/`·`output/`·`logs/`는 호스트 디렉토리를 볼륨 마운트하므로 데이터가 컨테이너 밖에 남고, 웹에서 수정하는 `review_skips.yaml`·`regular_maintenance.yaml`도 유지됩니다.
 - 컨테이너 시간대는 `Asia/Seoul`로 고정되어 있습니다 (Dockerfile `TZ`).
 
-> 두 방식 모두 타이머의 `10,14:00`은 **서버 로컬 시간** 기준이므로, 한국 시간으로 돌리려면 `sudo timedatectl set-timezone Asia/Seoul` 로 시간대를 먼저 맞추세요. 스케줄 변경은 `.timer`의 `OnCalendar=` 한 줄만 수정합니다.
+> 두 방식 모두 타이머의 `15:00`은 **서버 로컬 시간** 기준이므로, 한국 시간으로 돌리려면 `sudo timedatectl set-timezone Asia/Seoul` 로 시간대를 먼저 맞추세요. 스케줄 변경은 `.timer`의 `OnCalendar=` 한 줄만 수정합니다.
 
 ## 설정 파일
 
@@ -342,11 +342,11 @@ logs/
 │   ├── DEPLOY.md                         # venv+systemd 배포 가이드 (최신 OS)
 │   ├── sitecheck-web.service             # 웹 대시보드 상주 서비스
 │   ├── sitecheck-collect.service         # 수집 1회 실행 (oneshot)
-│   ├── sitecheck-collect.timer           # 화/금 10:00·14:00 트리거
+│   ├── sitecheck-collect.timer           # 화/목 15:00 트리거
 │   └── docker/                           # Docker 배포 (CentOS 7 등 구형 OS)
 │       ├── DOCKER.md                     # Docker 배포 가이드
 │       ├── sitecheck-collect.service     # docker compose run --rm collect 호출
-│       └── sitecheck-collect.timer       # 화/금 10:00·14:00 트리거
+│       └── sitecheck-collect.timer       # 화/목 15:00 트리거
 ├── config/
 │   ├── sites.yaml                        # 사이트 목록 + enabled 플래그
 │   ├── keywords.yaml                     # 점검/제외 키워드
@@ -422,9 +422,19 @@ logs/
 - (Docker) 수집이 돌다가 결과 없이 끝나고 `output/json`이 빔 → 컨테이너가 도중에 죽고 `restart` 정책으로 조용히 재시작된 것. `sudo docker inspect sitecheck-web --format '{{.RestartCount}}'`가 0보다 크면 확정. `dmesg`에 `invalid opcode ... libtorch_cpu.so`가 있으면 CPU가 AVX2 미지원인 경우로, 기본값(OCR 비양자화)에서는 발생하지 않아야 하나 `SITECHECK_OCR_QUANTIZE=1`을 켰다면 끄세요.
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
+## 최근 변경 (2026-10)
+
+### DB 저장을 행별 단건에서 수집 단위 일괄 요청으로 (2026-10-15)
+
+- **변경**: `sync_workbook`이 행마다 단건 POST 하던 것을 사전 판정(정확 키 조회·후보) 후 **한 번의 `:import`**로 보냄. 요청에 수집일 `collectionDate`(엑셀 파일 날짜) 필수, 신규 0건이어도 빈 요청으로 "완료"를 알림. 응답의 `isNew`로 엑셀 노란색을 결정.
+- **수집 실패 정책**: `NoticeHit.error`가 하나라도 있으면 그 회차는 DB에 보내지 않음(상태줄 "DB 동기화 건너뜀"). 종료된 일반점검은 전송 제외(종료 제외 n건), 종료 시각 없는 일반점검은 오류 행.
+- **DB 초기화 대응**: 연결 대상 404면 그 행의 옛 번호만 버리고 같은 묶음을 재전송(요청은 전체 롤백이라 안전).
+- **자동 수집 시각**: 화·금 10:00·14:00 → **화·목 15:00** (`deploy/*.timer`). 서버에 유닛 파일을 다시 복사해야 반영.
+- **배포 순서**: 서버(dashboard-server)가 `collectionDate`를 요구하는 버전으로 먼저 나가면 이전 SiteCheck는 422 → 양쪽을 같은 시점에 배포.
+
 ## 최근 변경 (2026-09)
 
-### 자동 수집 스케줄 변경: 화·금 13:00 → 화·금 10:00·14:00 (2026-09-30)
+### 자동 수집 스케줄 변경: 화·금 13:00 → 화·목 15:00 (2026-09-30)
 
 - **변경**: `deploy/sitecheck-collect.timer`·`deploy/docker/sitecheck-collect.timer`의 `OnCalendar=Tue,Fri *-*-* 10,14:00:00` (주 4회). README·DEPLOY.md·DOCKER.md의 스케줄 표기도 동일하게 갱신.
 - **배포**: 서버(Docker)에 timer/service 설치 및 `enable --now`. 시간대는 서버 로컬(Asia/Seoul) 기준.

@@ -43,7 +43,7 @@ from .excel_writer import (
 from openpyxl.styles import PatternFill
 from .keyword_matcher import carryover_excluded, is_maintenance
 from .notice_api import NoticeApiError
-from .notice_sync import (append_row as api_append_row, configured_sync,
+from .notice_sync import (append_row as api_append_row, collection_date_of, configured_sync,
                           delete_row as api_delete_row, item_from_cells,
                           resolve_item, row_item_id,
                           sync_workbook, update_row as api_update_row)
@@ -1097,7 +1097,7 @@ def sync_excel_file(filename: str) -> Dict[str, Any]:
             sync = configured_sync()
             if sync is None:
                 return {"ok": False, "error": "SITECHECK_API_BASE_URL이 설정되지 않았습니다."}
-            result = sync_workbook(path, *sync)
+            result = sync_workbook(path, *sync, collection_date=collection_date_of(path))
             return {"ok": not result["errors"], **result}
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -1133,7 +1133,7 @@ def decide_excel_row(filename: str, excel_row: int, action: str,
                 if resolved["status"] in ("NEEDS_DECISION", "HOLD", "SUPPRESSED_DELETED"):
                     raise ValueError("삭제되었거나 유효하지 않은 공지는 결정 대상으로 사용할 수 없습니다.")
             state.decide(item, action, linked_id)
-            result = sync_workbook(path, api, state)
+            result = sync_workbook(path, api, state, collection_date=collection_date_of(path))
             return {"ok": not result["errors"], **result}
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -1271,13 +1271,24 @@ async def _collect() -> None:
     # 엑셀은 전체 hits(carryover 재감지 포함)로 작성 — 텍스트 갱신을 위해
     write_excel(hits, regular, out_path, run_id, carried=carried)
     sync = configured_sync()
-    sync_result = sync_workbook(out_path, *sync) if sync else {"status": "not_configured"}
+    failed_sites = sorted({h.site_name or h.site_code for h in hits if h.error})
     sync_error = ""
-    if sync and sync_result["errors"]:
-        # 엑셀은 이미 저장됐다. DB 동기화 실패로 수집을 실패시키지 않고 상태줄에 표시만 한다
-        # (같은 행은 다음 수집에서 다시 전송되므로 자동 복구)
-        sync_error = f"DB 동기화 오류 {len(sync_result['errors'])}건"
-        logger.error(f"{sync_error}: {sync_result['errors'][:3]}")
+    if sync is None:
+        sync_result: Dict[str, Any] = {"status": "not_configured"}
+    elif failed_sites:
+        # 기관 하나라도 수집에 실패하면 그 회차는 DB에 반영하지 않는다 (이전 신규 표시도 그대로).
+        # 엑셀은 이미 저장됐고, 다음 수집이 전체 성공하면 그때 한꺼번에 반영된다
+        sync_result = {"status": "skipped", "reason": f"수집 실패 기관 {len(failed_sites)}곳",
+                       "failedSites": failed_sites, "saved": 0, "held": [], "errors": []}
+        sync_error = f"DB 동기화 건너뜀: 수집 실패 {len(failed_sites)}곳"
+        logger.warning(f"{sync_error}: {failed_sites[:5]}")
+    else:
+        sync_result = sync_workbook(out_path, *sync, collection_date=run_date)
+        if sync_result["errors"]:
+            # 엑셀은 이미 저장됐다. DB 동기화 실패로 수집을 실패시키지 않고 상태줄에 표시만 한다
+            # (같은 행은 다음 수집에서 다시 전송되므로 자동 복구)
+            sync_error = f"DB 동기화 오류 {len(sync_result['errors'])}건"
+            logger.error(f"{sync_error}: {sync_result['errors'][:3]}")
     with _run_lock:
         RUN_STATE["sync"] = sync_result
 
@@ -1717,6 +1728,7 @@ async function refreshStatus(){
   line.innerHTML = `<span class="dot ${s.status}"></span>${label}` +
     (s.finished ? ` · 마지막 실행 ${esc(s.finished)}` : (s.started ? ` · 시작 ${esc(s.started)}` : '')) +
     (s.sync && s.sync.status === 'not_configured' ? ' · DB 미연동' :
+      s.sync && s.sync.status === 'skipped' ? ' · DB 동기화 건너뜀(' + esc(s.sync.reason || '') + ')' :
       s.sync ? ' · DB 저장 ' + s.sync.saved + ' · 판단 필요 ' + s.sync.held.length +
         ' · DB 오류 ' + s.sync.errors.length : '') +
     (s.error ? ` · <span style="color:#fca5a5">${esc(s.error)}</span>` : '');
@@ -2462,6 +2474,7 @@ async function syncExcel(){
     await loadExcel(curExcelFile);
     renderDbPending(res.held);
     setEditState('DB 저장 ' + res.saved + '건 · 삭제 제외 ' + res.suppressed +
+      '건 · 종료 제외 ' + (res.skipped || []).length +
       '건 · 판단 필요 ' + res.held.length + '건 · 오류 ' + res.errors.length + '건',
       res.errors.length ? '#dc2626' : '#16a34a');
     if(res.errors.length) alert(res.errors.map(e => e.excelRow + '행: ' + e.error).join('\\n'));

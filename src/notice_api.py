@@ -10,10 +10,12 @@ import requests
 
 
 class NoticeApiError(Exception):
-    def __init__(self, message: str, *, status: int = 0, code: str = "") -> None:
+    def __init__(self, message: str, *, status: int = 0, code: str = "",
+                 details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        self.details = details or {}   # 예: {"itemId": "77"} — 어떤 대상이 문제였는지
 
 
 class NoticeApi:
@@ -69,7 +71,8 @@ class NoticeApi:
                                  status=response.status_code,
                                  code=str(error.get("code") or {
                                      401: "UNAUTHORIZED", 403: "FORBIDDEN"
-                                 }.get(response.status_code, "")))
+                                 }.get(response.status_code, "")),
+                                 details=error.get("details") if isinstance(error.get("details"), dict) else None)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -96,8 +99,11 @@ class NoticeApi:
                 raise NoticeApiError("API candidate pagination did not advance")
             params["beforeId"] = cursor
 
-    def import_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return self._request("POST", ":import", body={"items": items})["results"]
+    def import_items(self, items: list[dict[str, Any]], collection_date: str) -> list[dict[str, Any]]:
+        """한 수집 실행의 결과를 한 번에 저장한다. collection_date(yyyy-MM-dd, KST 수집 시작일)는
+        필수이며, 빈 items 라도 보내야 서버가 이전 날짜의 신규 표시(isNew)를 해제한다."""
+        body = {"items": items, "collectionDate": collection_date}
+        return self._request("POST", ":import", body=body)["results"]
 
     def create(self, item: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", body=item)
