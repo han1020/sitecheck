@@ -79,7 +79,8 @@ def _write_probe(api: NoticeApi) -> None:
         created_id = str(created["item"]["itemId"])
         print(f"POST create: INSERTED itemId={created_id}")
 
-        imported = api.import_items([{"clientRow": 1, **item}])[0]
+        imported = api.import_items([{"clientRow": 1, **item}],
+                                    datetime.now(KST).date().isoformat())[0]
         if imported["status"] != "EXISTING" or str(imported["item"]["itemId"]) != created_id:
             raise RuntimeError(f"Import dedup failed: {imported['status']}")
         print("POST import same identity: EXISTING")

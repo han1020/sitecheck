@@ -13,13 +13,16 @@ from src.notice_sync import (append_row, delete_row, item_from_cells, sync_workb
 
 
 CELLS = ["일반점검", "KRBK0101", "저축은행중앙회",
-         "2026.09.19(토) 00:00 ~ 06:00", "통합금융정보시스템 전체 업무", "수집 사유"]
+         "2027.03.20(토) 00:00 ~ 06:00", "통합금융정보시스템 전체 업무", "수집 사유"]
 
 
 class FakeApi:
+    """저장 API 흉내. create(단건)·import_items(일괄, collectionDate 필수)·isNew 를 명세대로 따른다."""
+
     def __init__(self):
         self.items = {}
         self.next_id = 1
+        self.import_calls = []
 
     def lookup(self, items):
         results = []
@@ -33,12 +36,14 @@ class FakeApi:
     def candidates(self, item):
         return [deepcopy(v) for v in self.items.values() if notice_key(v) == notice_key(item)]
 
-    def create(self, item):
+    def _save_one(self, item, collection_date):
+        """단건·일괄 공통 판정. 새 공지는 즉시 저장(같은 요청의 뒤 행은 앞 행 기준으로 판정)."""
         linked = item.get("linkedItemId")
         exact = self.lookup([item])[0]["item"]
         if linked:
             if linked not in self.items:
-                raise NoticeApiError("대상 공지를 찾을 수 없습니다.", status=404, code="ITEM_NOT_FOUND")
+                raise NoticeApiError("대상 공지를 찾을 수 없습니다.", status=404,
+                                     code="ITEM_NOT_FOUND", details={"itemId": linked})
             stored = self.items[linked]
             assert notice_key(stored) == notice_key(item)
             status = "LINKED_EXISTING"
@@ -50,12 +55,35 @@ class FakeApi:
             self.next_id += 1
             stored = {key: item[key] for key in CELL_FIELDS}
             stored.update({"itemId": item_id, "windowStart": item["windowStart"],
-                           "windowEnd": item["windowEnd"], "deletedAt": None})
+                           "windowEnd": item["windowEnd"], "deletedAt": None,
+                           "isNew": True, "createdDate": collection_date})
             self.items[item_id] = stored
             status = "INSERTED"
         if stored["deletedAt"]:
             status = "SUPPRESSED_DELETED"
         return {"status": status, "item": deepcopy(stored)}
+
+    def create(self, item):
+        return self._save_one(item, "2026-01-01")
+
+    def import_items(self, items, collection_date):
+        if not collection_date:
+            raise NoticeApiError("collectionDate: 필수 값입니다.", status=422, code="VALIDATION_ERROR")
+        self.import_calls.append({"n": len(items), "collectionDate": collection_date})
+        snapshot, next_id = deepcopy(self.items), self.next_id
+        try:
+            judged = [(it["clientRow"], self._save_one(it, collection_date)) for it in items]
+            for v in self.items.values():          # 이전 날짜의 신규 표시 해제 (같은 트랜잭션)
+                if v["isNew"] and v["createdDate"] < collection_date:
+                    v["isNew"] = False
+            results = []                           # 응답 item 은 해제까지 끝난 최종 저장값
+            for client_row, r in judged:
+                item = self.items.get(str(r["item"]["itemId"]), r["item"])
+                results.append({"clientRow": client_row, "status": r["status"], "item": deepcopy(item)})
+            return results
+        except Exception:
+            self.items, self.next_id = snapshot, next_id   # 전체 롤백
+            raise
 
     def patch(self, item_id, changes):
         self.items[item_id].update(changes)
@@ -68,6 +96,15 @@ class FakeApi:
 
 def state(tmp_path: Path) -> NoticeState:
     return NoticeState(tmp_path / "state" / "test" / "notice_state.json", "test")
+
+
+def is_yellow(path: Path, row: int = 3) -> bool:
+    wb = load_workbook(path)
+    try:
+        rgb = wb["점검"].cell(row, 2).fill.fgColor.rgb
+        return isinstance(rgb, str) and rgb.upper().endswith("FFFF00")
+    finally:
+        wb.close()
 
 
 def sheet_rows(path: Path):
@@ -124,7 +161,7 @@ def test_schedule_change_requires_confirmation_and_creates_new(make_xlsx, tmp_pa
     path = make_xlsx(carried=[CELLS])
     sync_workbook(path, api, local)
     edited = [*CELLS]
-    edited[3] = "2026.09.19(토) 00:00 ~ 07:00"
+    edited[3] = "2027.03.20(토) 00:00 ~ 07:00"
     assert update_row(path, 3, edited, api, local)["schedule_change"]
     assert len(api.items) == 1
     assert update_row(path, 3, edited, api, local, allow_schedule_create=True)["new_notice"]
@@ -150,7 +187,7 @@ def test_review_append_uses_identity_not_code_and_reason(make_xlsx, tmp_path):
     first = append_row(path, CELLS, api, local)
     assert first["ok"] and not first.get("duplicate")
     second = [*CELLS]
-    second[3] = "2026.09.20(일) 00:00 ~ 06:00"
+    second[3] = "2027.03.21(일) 00:00 ~ 06:00"
     assert append_row(path, second, api, local)["ok"]
     assert len(api.items) == 2
     assert append_row(path, CELLS, api, local)["duplicate"]
@@ -172,7 +209,7 @@ def test_web_edit_delete_and_sort_keep_hidden_id(make_xlsx, tmp_path, monkeypatc
 
     api, local = FakeApi(), state(tmp_path)
     later = [*CELLS]
-    later[3] = "2026.09.20(일) 00:00 ~ 06:00"
+    later[3] = "2027.03.21(일) 00:00 ~ 06:00"
     path = make_xlsx(carried=[later, CELLS])
     sync_workbook(path, api, local)
     monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
@@ -273,7 +310,7 @@ class DownApi(FakeApi):
 def test_sync_workbook_stops_early_when_api_unreachable(make_xlsx, tmp_path):
     api, local = DownApi(), state(tmp_path)
     later = [*CELLS]
-    later[3] = "2026.09.20(일) 00:00 ~ 06:00"
+    later[3] = "2027.03.21(일) 00:00 ~ 06:00"
     path = make_xlsx(carried=[CELLS, later])
     result = sync_workbook(path, api, local)
     assert result["saved"] == 0 and len(result["errors"]) == 1
@@ -306,3 +343,103 @@ def test_collect_keeps_excel_and_run_json_when_api_down(tmp_path, monkeypatch):
     assert "DB 동기화 오류 1건" == webserver.RUN_STATE["error"]
     assert list((tmp_path / "excel").glob("*.xlsx"))          # 엑셀은 생성
     assert list((tmp_path / "json").glob("*.json"))           # 감지목록 이력도 남음
+
+
+def test_sync_sends_one_import_with_collection_date(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    later = [*CELLS]
+    later[3] = "2027.03.21(일) 00:00 ~ 06:00"
+    path = make_xlsx(carried=[CELLS, later], name="[사이트점검]_20270301.xlsx")
+    result = sync_workbook(path, api, local)
+    assert result["saved"] == 2 and result["errors"] == []
+    assert api.import_calls == [{"n": 2, "collectionDate": "2027-03-01"}]   # 행별이 아니라 한 번
+    assert result["collectionDate"] == "2027-03-01"
+    assert sorted(r[6] for r in sheet_rows(path)) == ["1", "2"]
+
+
+def test_empty_completion_signal_is_sent_when_nothing_to_store(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    sync_workbook(make_xlsx(carried=[CELLS]), api, local)
+    changed = [*CELLS]
+    changed[4] = "다르게 수집된 업무"
+    second = make_xlsx(carried=[changed], name="[사이트점검]_20270302.xlsx")
+    api.import_calls.clear()
+    result = sync_workbook(second, api, local)              # 후보 → 판단 필요 → 보낼 행 없음
+    assert result["held"] and result["saved"] == 0
+    assert api.import_calls == [{"n": 0, "collectionDate": "2027-03-02"}]   # 그래도 완료 신호는 보낸다
+
+
+def test_ended_general_notice_is_not_sent(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    ended = [*CELLS]
+    ended[3] = "2024.01.06(토) 00:00 ~ 06:00"
+    path = make_xlsx(carried=[ended])
+    result = sync_workbook(path, api, local)
+    assert result["saved"] == 0 and result["errors"] == []
+    assert result["skipped"] == [{"excelRow": 3, "reason": "이미 종료된 점검"}]
+    assert api.items == {} and api.import_calls[0]["n"] == 0
+
+
+def test_general_notice_without_end_time_is_reported_not_sent(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    vague = [*CELLS]
+    vague[3] = "추후 공지"                                   # 파싱 불가 → 종료 시각 없음
+    path = make_xlsx(carried=[vague, CELLS])
+    result = sync_workbook(path, api, local)
+    assert result["saved"] == 1 and len(result["errors"]) == 1
+    assert "종료 시각" in result["errors"][0]["error"]
+    assert api.import_calls[0]["n"] == 1                    # 나머지 행은 정상 저장
+
+
+def test_is_new_from_server_drives_yellow_fill(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS], name="[사이트점검]_20270301.xlsx")   # carried = 흰색으로 작성됨
+    assert not is_yellow(path)
+    sync_workbook(path, api, local)                         # 서버: INSERTED, isNew=True
+    assert is_yellow(path)
+    nxt = make_xlsx(carried=[CELLS], name="[사이트점검]_20270302.xlsx")
+    sync_workbook(nxt, api, local)                          # 다음 날 수집 성공 → 서버가 isNew 해제
+    assert not is_yellow(nxt)
+
+
+def test_stale_link_in_batch_is_dropped_and_resent(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    later = [*CELLS]
+    later[3] = "2027.03.21(일) 00:00 ~ 06:00"
+    path = make_xlsx(carried=[CELLS, later])
+    sync_workbook(path, api, local)
+    reset_db(api)
+    api.import_calls.clear()
+    result = sync_workbook(path, api, local)
+    assert result["errors"] == [] and result["saved"] == 2
+    assert len(api.import_calls) >= 2                        # 404 → 번호 버리고 재전송
+    assert sorted(r[6] for r in sheet_rows(path)) == ["100", "101"]
+
+
+def test_collect_skips_db_sync_when_a_site_failed(tmp_path, monkeypatch):
+    from src import webserver
+    from src.scraper import NoticeHit
+
+    api, local = FakeApi(), state(tmp_path)
+    (tmp_path / "excel").mkdir()
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path / "excel")
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "SCREENSHOT_DIR", tmp_path / "shots")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+
+    async def fake_scrape_all(**kwargs):
+        return [NoticeHit(site_code=CELLS[1], site_name=CELLS[2], category="BK",
+                          title="시스템 점검 안내", posted_date="2026-09-01", detail_url="",
+                          screenshot_path="", window=None, schedule_text=CELLS[3],
+                          service_text=CELLS[4], reason_text=CELLS[5]),
+                NoticeHit(site_code="KRBK0999", site_name="응답 없는 은행", category="BK",
+                          title="", posted_date="", detail_url="", screenshot_path="",
+                          window=None, error="handler: timeout")]
+    monkeypatch.setattr(webserver, "scrape_all", fake_scrape_all)
+
+    webserver._run_in_thread()
+    assert webserver.RUN_STATE["status"] == "done"
+    assert webserver.RUN_STATE["sync"]["status"] == "skipped"
+    assert "건너뜀" in webserver.RUN_STATE["error"]
+    assert api.import_calls == [] and api.items == {}        # DB는 그대로
+    assert list((tmp_path / "excel").glob("*.xlsx"))          # 엑셀·이력은 남는다

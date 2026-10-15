@@ -146,7 +146,7 @@ server {
 
 ---
 
-## 7. 자동 주기 수집 (매주 화/금 10:00·14:00) — systemd timer (venv 방식 — 188은 8절)
+## 7. 자동 주기 수집 (매주 화/목 15:00) — systemd timer (venv 방식 — 188은 8절)
 
 웹의 `지금 수집` 버튼을 사람이 누르지 않아도, 정해진 시각에 자동 수집되게 합니다.
 `collect.py`는 웹의 '지금 수집'과 동일 파이프라인이라 결과가 **감지 목록 + 엑셀뷰** 양쪽에
@@ -154,7 +154,7 @@ server {
 
 ### 7-1. 서버 시간대부터 확인 (★ 중요)
 
-타이머의 `10,14:00`은 **서버 로컬 시간** 기준입니다. 한국 시간으로 돌리려면:
+타이머의 `15:00`은 **서버 로컬 시간** 기준입니다. 한국 시간으로 돌리려면:
 
 ```bash
 timedatectl                              # 현재 시간대 확인
@@ -206,6 +206,8 @@ journalctl -u sitecheck-collect.service -f       # 수집 로그
 
 ### 8-1. 타이머 전환 (최초 적재가 끝난 뒤)
 
+2026-10-15부터 수집 시각이 화·목 15:00이다. 그 전에 설치한 서버는 아래 `sed`/`cp`를 다시 실행하고 `daemon-reload` → `systemctl restart sitecheck-collect.timer`로 타이머를 갱신한다.
+
 `deploy/docker/sitecheck-collect.service`는 `/opt/siteCheck` 기준이라 경로와 `--env-file`을 넣어 복사한다. 한 줄씩 실행한다.
 
 ```bash
@@ -219,12 +221,12 @@ grep -n -E 'WorkingDirectory|ExecStart' /etc/systemd/system/sitecheck-collect.se
 systemctl daemon-reload
 systemctl start sitecheck-collect.service        # 수동 1회 (수 분). 끝에 '수집 완료 … | 점검 API 동기화: {...}', 'DB 동기화 오류' 없어야 함
 journalctl -u sitecheck-collect.service -n 40 --no-pager
-systemctl enable --now sitecheck-collect.timer   # 화·금 10:00·14:00
+systemctl enable --now sitecheck-collect.timer   # 화·목 15:00
 systemctl list-timers sitecheck-collect.timer --no-pager
 ```
 
 호스트 방식 유닛이 남아 있으면 먼저 지운다: `systemctl disable --now sitecheck-web; rm -f /etc/systemd/system/sitecheck-web.service`.
-확인: 대시보드 상태줄에 `DB 저장 n · 판단 필요 n · DB 오류 0`, `list-timers`의 NEXT가 다음 화/금 10:00·14:00(KST).
+확인: 대시보드 상태줄에 `DB 저장 n · 판단 필요 n · DB 오류 0`, `list-timers`의 NEXT가 다음 화/목 15:00(KST).
 
 ### 8-2. 코드 수정 후 반영
 
@@ -246,7 +248,7 @@ docker compose ps && docker compose logs --tail 5 web
 
 ### 8-3. 50 서버 내리기 (188 병행 운영 일주일 뒤)
 
-188의 자동 수집이 화·금 두 번 이상 정상(`DB 동기화 오류` 없음, 엑셀·감지목록 갱신)이면 50을 내린다.
+188의 자동 수집이 화·목 두 번 이상 정상(`DB 동기화 오류` 없음, 엑셀·감지목록 갱신)이면 50을 내린다.
 **50의 `config/`·`output/`을 다시 188로 복사하지 않는다** — 188의 엑셀에는 숨긴 H열 itemId와 `output/state/`가 생겨 있어 덮어쓰면 꼬인다.
 병행 기간의 편집(엑셀뷰·키워드·정기점검·스킵)은 188에서만 한다.
 
@@ -275,5 +277,5 @@ sudo tar czf /root/sitecheck-50-final-$(date +%Y%m%d).tgz -C /opt/siteCheck conf
 | 유닛 | 역할 | enable 대상 |
 |------|------|-------------|
 | `sitecheck-web.service`     | 웹 대시보드 상주 | ✅ `enable --now` |
-| `sitecheck-collect.timer`   | 화/금 10:00·14:00 트리거 | ✅ `enable --now` |
+| `sitecheck-collect.timer`   | 화/목 15:00 트리거 | ✅ `enable --now` |
 | `sitecheck-collect.service` | 수집 1회 실행 | ❌ (타이머가 호출) |

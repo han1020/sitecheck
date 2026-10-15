@@ -100,10 +100,14 @@ async def run_once(headless: bool = True) -> Path:
     # 엑셀은 전체 hits(carryover 재감지 포함)로 작성 — 텍스트 갱신을 위해
     write_excel(hits, regular, out_path, run_id, carried=carried)
     sync = configured_sync()
+    failed_sites = sorted({h.site_name or h.site_code for h in hits if h.error})
     if sync is None:
         log.warning("점검 API 미설정: 엑셀만 생성했습니다 (SITECHECK_API_BASE_URL 필요)")
+    elif failed_sites:
+        # 기관 하나라도 실패하면 그 회차는 DB에 반영하지 않는다 (다음 전체 성공 수집에서 반영)
+        log.warning("DB 동기화 건너뜀: 수집 실패 %d곳 %s", len(failed_sites), failed_sites[:5])
     else:
-        sync_result = sync_workbook(out_path, *sync)
+        sync_result = sync_workbook(out_path, *sync, collection_date=run_date)
         log.info("점검 API 동기화: %s", sync_result)
         if sync_result["errors"]:
             # 엑셀은 이미 저장됨. 동기화 오류는 기록만 하고 다음 수집에서 다시 보낸다
