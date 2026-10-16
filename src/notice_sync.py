@@ -47,11 +47,6 @@ def exclusion_reason(item: dict[str, Any], now: datetime | None = None) -> str |
     return None
 
 
-def is_regular(item: dict[str, Any]) -> bool:
-    """정기점검은 엑셀·화면에만 두고 DB에는 저장하지 않는다 (2026-10 요건)."""
-    return item["checkType"] == "정기점검"
-
-
 def configured_sync() -> tuple[NoticeApi, NoticeState] | None:
     api = NoticeApi.from_env()
     if api is None:
@@ -198,10 +193,9 @@ def _import_batch(api: NoticeApi, state: NoticeState,
 def sync_workbook(path: Path, api: NoticeApi, state: NoticeState,
                   collection_date: str | None = None) -> dict[str, Any]:
     """엑셀의 최종 행을 한 번의 :import 로 DB와 맞춘다 (한 수집 실행 = 한 번의 완료 신호).
-    보류·판단 필요·종료·검증 실패 행은 보내지 않고 각각 held / skipped / errors 로 보고한다.
-    정기점검 행은 DB 저장 대상이 아니라 보내지 않고 regular 로 센다."""
+    보류·판단 필요·종료·검증 실패 행은 보내지 않고 각각 held / skipped / errors 로 보고한다."""
     collection_date = collection_date or collection_date_of(path)
-    result: dict[str, Any] = {"saved": 0, "suppressed": 0, "regular": 0, "held": [], "errors": [],
+    result: dict[str, Any] = {"saved": 0, "suppressed": 0, "held": [], "errors": [],
                               "skipped": [], "collectionDate": collection_date}
     try:
         api.lookup([])   # 연결·인증 사전 점검: 실패하면 행마다 재시도하며 매달리지 않고 바로 끝낸다
@@ -213,7 +207,6 @@ def sync_workbook(path: Path, api: NoticeApi, state: NoticeState,
     wb = load_workbook(path)
     ws = _sheet(wb)
     batch: list[dict[str, Any]] = []
-    cleared = False
     try:
         for row in range(3, ws.max_row + 1):
             cells = _cells(ws, row)
@@ -221,12 +214,6 @@ def sync_workbook(path: Path, api: NoticeApi, state: NoticeState,
                 continue
             try:
                 item = item_from_cells(cells)
-                if is_regular(item):
-                    result["regular"] += 1
-                    if row_item_id(ws, row):   # 예전 버전이 적어 둔 DB 번호는 더 이상 쓰지 않는다
-                        ws.cell(row, ID_COL).value = None
-                        cleared = True
-                    continue
                 reason = exclusion_reason(item, now)
                 if reason == "이미 종료된 점검":
                     result["skipped"].append({"excelRow": row, "reason": reason})
@@ -273,7 +260,7 @@ def sync_workbook(path: Path, api: NoticeApi, state: NoticeState,
             result["saved"] += 1
         for row in reversed(suppressed_rows):
             ws.delete_rows(row, 1)
-        if result["saved"] or suppressed_rows or cleared:
+        if result["saved"] or suppressed_rows:
             save_atomic(wb, path)
     finally:
         wb.close()
@@ -345,16 +332,10 @@ def update_row(path: Path, row: int, cells: list[Any], api: NoticeApi,
         ws = _sheet(wb)
         if row < 3 or row > ws.max_row:
             raise ValueError("잘못된 행 번호입니다.")
-        old_item = identity_from_cells(_cells(ws, row))
-        if is_regular(old_item):            # DB에 없는 행이라 파일만 고친다
-            for col, field in enumerate(CELL_FIELDS, 2):
-                ws.cell(row, col).value = new_item[field]
-            ws.cell(row, ID_COL).value = None
-            save_atomic(wb, path)
-            return {"ok": True, "updated": 1, "item_id": None}
         item_id = row_item_id(ws, row)
         if not item_id:
             raise ValueError("DB 항목 ID가 없습니다. 먼저 해당 엑셀을 API와 동기화하세요.")
+        old_item = identity_from_cells(_cells(ws, row))
         changed_schedule = norm_identity(old_item["scheduleText"]) != norm_identity(new_item["scheduleText"])
         if changed_schedule and not allow_schedule_create:
             return {"ok": False, "schedule_change": True,
@@ -403,10 +384,6 @@ def delete_row(path: Path, row: int, api: NoticeApi, state: NoticeState) -> dict
         ws = _sheet(wb)
         if row < 3 or row > ws.max_row:
             raise ValueError("잘못된 행 번호입니다.")
-        if is_regular(identity_from_cells(_cells(ws, row))):   # DB에 없는 행이라 파일에서만 지운다
-            ws.delete_rows(row, 1)
-            save_atomic(wb, path)
-            return {"ok": True, "deleted": 1, "item_id": None}
         item_id = row_item_id(ws, row)
         if not item_id:
             raise ValueError("DB 항목 ID가 없습니다. 먼저 해당 엑셀을 API와 동기화하세요.")

@@ -2475,7 +2475,6 @@ async function syncExcel(){
     renderDbPending(res.held);
     setEditState('DB 저장 ' + res.saved + '건 · 삭제 제외 ' + res.suppressed +
       '건 · 종료 제외 ' + (res.skipped || []).length +
-      '건 · 정기점검 제외 ' + (res.regular || 0) +
       '건 · 판단 필요 ' + res.held.length + '건 · 오류 ' + res.errors.length + '건',
       res.errors.length ? '#dc2626' : '#16a34a');
     if(res.errors.length) alert(res.errors.map(e => e.excelRow + '행: ' + e.error).join('\\n'));
