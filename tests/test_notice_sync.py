@@ -416,6 +416,58 @@ def test_stale_link_in_batch_is_dropped_and_resent(make_xlsx, tmp_path):
     assert sorted(r[6] for r in sheet_rows(path)) == ["100", "101"]
 
 
+def test_edit_of_unsaved_row_writes_file_and_saves_through_sync(make_xlsx, tmp_path, monkeypatch):
+    """종료 시각이 없어 저장되지 않은 행을 엑셀뷰에서 고치면 파일에 쓰고 바로 DB에 올린다."""
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    no_end = [*CELLS]
+    no_end[3] = "2027.03.20(토) 07:00"                        # 종료 없음 → 저장 안 됨
+    path = make_xlsx(carried=[no_end])
+    assert sync_workbook(path, api, local)["errors"]
+    assert sheet_rows(path)[0][6] is None
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+    fixed = [*no_end]
+    fixed[3] = "2027.03.20(토) 07:00 ~ 2027.03.21(일) 24:00"
+    res = webserver.update_excel_rows(path.name, [{"excel_row": 3, "cells": fixed}])
+    assert res["ok"] and res["sync"]["saved"] == 1 and res["sync"]["errors"] == []
+    assert sheet_rows(path)[0][3] == fixed[3] and sheet_rows(path)[0][6] == "1"
+    assert api.items["1"]["windowEnd"] == "2027-03-22T00:00:00+09:00"
+
+
+def test_delete_of_unsaved_row_touches_only_the_file(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    no_end = [*CELLS]
+    no_end[3] = "2027.03.20(토) 07:00"
+    path = make_xlsx(carried=[no_end])
+    assert delete_row(path, 3, api, local) == {"ok": True, "deleted": 1, "item_id": None}
+    assert sheet_rows(path) == [] and api.items == {}
+
+
+def test_row_that_lost_its_hidden_id_is_matched_by_identity(make_xlsx, tmp_path):
+    """H열이 비었어도 DB에 같은 공지가 있으면 그 번호로 수정(PATCH)·삭제한다."""
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS])
+    sync_workbook(path, api, local)
+
+    def drop_hidden_id():
+        wb = load_workbook(path)
+        wb["점검"].cell(3, 8).value = None
+        wb.save(path)
+        wb.close()
+
+    drop_hidden_id()
+    edited = [*CELLS]
+    edited[5] = "번호 없이 고친 사유"
+    assert update_row(path, 3, edited, api, local)["item_id"] == "1"
+    assert api.items["1"]["reasonText"] == "번호 없이 고친 사유"   # 새 행이 아니라 PATCH
+    assert sheet_rows(path)[0][6] == "1"
+    drop_hidden_id()
+    assert delete_row(path, 3, api, local)["deleted"] == 1
+    assert api.items["1"]["deletedAt"] and sheet_rows(path) == []
+
+
 def test_collect_skips_db_sync_when_a_site_failed(tmp_path, monkeypatch):
     from src import webserver
     from src.scraper import NoticeHit
