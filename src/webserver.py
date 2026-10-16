@@ -955,6 +955,7 @@ def update_excel_rows(filename: str, edits: List[Dict[str, Any]]) -> Dict[str, A
             sync = configured_sync()
             if sync is not None:
                 updated = 0
+                needs_sync = False
                 for edit in edits:
                     result = api_update_row(
                         path, int(edit.get("excel_row", 0)), edit.get("cells") or [],
@@ -962,7 +963,13 @@ def update_excel_rows(filename: str, edits: List[Dict[str, Any]]) -> Dict[str, A
                     if not result["ok"]:
                         return {**result, "updated": updated}
                     updated += result["updated"]
-                return {"ok": True, "updated": updated}
+                    needs_sync = needs_sync or bool(result.get("needs_sync"))
+                response: Dict[str, Any] = {"ok": True, "updated": updated}
+                if needs_sync:
+                    # 저장되지 않았던 행을 고쳤다: 파일에 쓴 값으로 바로 DB에 올린다
+                    response["sync"] = sync_workbook(path, *sync,
+                                                     collection_date=collection_date_of(path))
+                return response
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc), "updated": locals().get("updated", 0)}
         wb = load_workbook(path)  # 스타일 보존 위해 data_only=False
@@ -2531,8 +2538,15 @@ async function saveExcel(){
     return;
   }
   if(res.ok){
-    setEditState(`저장 완료 (${res.updated}행)`, '#16a34a');
+    let msg = `저장 완료 (${res.updated}행)`;
+    if(res.sync){   // 저장되지 않았던 행을 고친 경우: 고친 값을 바로 DB에 올린 결과
+      msg += ' · DB 저장 ' + res.sync.saved + '건 · 판단 필요 ' + res.sync.held.length +
+        '건 · 오류 ' + res.sync.errors.length + '건';
+      renderDbPending(res.sync.held);
+    }
+    setEditState(msg, res.sync && res.sync.errors.length ? '#dc2626' : '#16a34a');
     loadExcel(curExcelFile);   // 엑셀에서 다시 읽어 동기화
+    if(res.sync && res.sync.errors.length) alert(res.sync.errors.map(e => e.excelRow + '행: ' + e.error).join('\\n'));
   } else {
     setEditState('저장 실패: ' + (res.error || ''), '#dc2626');
   }

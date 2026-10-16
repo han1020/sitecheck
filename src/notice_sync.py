@@ -40,7 +40,7 @@ def exclusion_reason(item: dict[str, Any], now: datetime | None = None) -> str |
     if item["checkType"] != "일반점검":
         return None
     if not item["windowEnd"]:
-        return "일반점검은 종료 시각이 필요합니다. 일시를 확인하거나 검토 탭에서 다시 입력하세요."
+        return "일반점검은 종료 시각이 필요합니다. 엑셀뷰에서 일시에 종료 시각을 적어 저장하세요."
     end = datetime.fromisoformat(item["windowEnd"])
     if end <= (now or datetime.now(KST)):
         return "이미 종료된 점검"
@@ -272,6 +272,12 @@ def row_item_id(ws, row: int) -> str | None:
     return str(value) if value else None
 
 
+def _lookup_id(api: NoticeApi, item: dict[str, Any]) -> str | None:
+    """H열 번호가 없는 행의 DB 번호를 식별값으로 찾는다 (DB에 없거나 삭제됐으면 None)."""
+    found = api.lookup([{**{k: item[k] for k in CELL_FIELDS[:5]}, "clientRow": 1}])[0]
+    return str(found["item"]["itemId"]) if found["status"] == "FOUND" else None
+
+
 def same_identity(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return identity_hash(a) == identity_hash(b) and all(
         norm_identity(a[field]) == norm_identity(b[field]) for field in CELL_FIELDS[:5])
@@ -333,9 +339,17 @@ def update_row(path: Path, row: int, cells: list[Any], api: NoticeApi,
         if row < 3 or row > ws.max_row:
             raise ValueError("잘못된 행 번호입니다.")
         item_id = row_item_id(ws, row)
-        if not item_id:
-            raise ValueError("DB 항목 ID가 없습니다. 먼저 해당 엑셀을 API와 동기화하세요.")
         old_item = identity_from_cells(_cells(ws, row))
+        if not item_id:
+            # 저장되지 않은 행(종료 시각 없음·판단 필요·동기화 실패)이거나 번호를 잃은 행.
+            # DB에 같은 식별값이 있으면 그 번호로 PATCH 하고, 없으면 파일만 고친 뒤 호출자가
+            # 동기화하도록 알린다 — 고친 값으로 새로 저장된다
+            item_id = _lookup_id(api, old_item)
+            if not item_id:
+                for col, field in enumerate(CELL_FIELDS, 2):
+                    ws.cell(row, col).value = new_item[field]
+                save_atomic(wb, path)
+                return {"ok": True, "updated": 1, "item_id": None, "needs_sync": True}
         changed_schedule = norm_identity(old_item["scheduleText"]) != norm_identity(new_item["scheduleText"])
         if changed_schedule and not allow_schedule_create:
             return {"ok": False, "schedule_change": True,
@@ -386,7 +400,13 @@ def delete_row(path: Path, row: int, api: NoticeApi, state: NoticeState) -> dict
             raise ValueError("잘못된 행 번호입니다.")
         item_id = row_item_id(ws, row)
         if not item_id:
-            raise ValueError("DB 항목 ID가 없습니다. 먼저 해당 엑셀을 API와 동기화하세요.")
+            # 저장되지 않은 행이면 파일에서만 지운다. DB에 같은 식별값이 있으면 그 번호로 지운다
+            item_id = _lookup_id(api, identity_from_cells(_cells(ws, row)))
+            if not item_id:
+                ws.delete_rows(row, 1)
+                save_atomic(wb, path)
+                return {"ok": True, "deleted": 1, "item_id": None}
+            ws.cell(row, ID_COL).value = item_id   # 아래 삭제 루프가 이 행도 찾도록
         op_id = state.begin({"kind": "DELETE", "file": path.name, "row": row,
                              "itemId": item_id})
         try:
