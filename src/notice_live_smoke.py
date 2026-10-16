@@ -14,6 +14,7 @@ KST = timezone(timedelta(hours=9))
 
 
 def _regular_lookup(api: NoticeApi) -> None:
+    """정기점검은 DB 저장 대상이 아니다. YAML 행이 아직 DB에 남아 있으면 정리가 필요하다고 알린다."""
     path = Path(__file__).resolve().parent.parent / "config" / "regular_maintenance.yaml"
     rows = load_regular(path)
     request = [
@@ -30,8 +31,9 @@ def _regular_lookup(api: NoticeApi) -> None:
         status = result["status"]
         counts[status] = counts.get(status, 0) + 1
     print(f"Regular YAML lookup ({len(rows)} rows): {counts}")
-    if counts.get("FOUND") != len(rows):
-        raise RuntimeError("Some regular YAML notices are missing from the API")
+    if counts.get("FOUND"):
+        print(f"WARNING: {counts['FOUND']} regular rows are still stored; "
+              "delete check_type='정기점검' rows from the DB")
 
 
 def _candidate_probe(api: NoticeApi) -> None:
