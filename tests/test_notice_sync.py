@@ -194,14 +194,49 @@ def test_review_append_uses_identity_not_code_and_reason(make_xlsx, tmp_path):
     assert len(sheet_rows(path)) == 2
 
 
-def test_regular_schedule_without_date_has_null_windows(make_xlsx, tmp_path):
-    regular = ["정기점검", "KRBK0101", "저축은행중앙회",
-               "매월 셋째 주 일요일 02:00 ~ 04:00", "인터넷뱅킹", "정기 시스템 점검"]
+REGULAR = ["정기점검", "KRBK0101", "저축은행중앙회",
+           "매월 셋째 주 일요일 02:00 ~ 04:00", "인터넷뱅킹", "정기 시스템 점검"]
+
+
+def test_regular_rows_stay_in_excel_but_are_not_sent(make_xlsx, tmp_path):
     api, local = FakeApi(), state(tmp_path)
-    path = make_xlsx(regular=[regular])
-    assert sync_workbook(path, api, local)["saved"] == 1
-    assert api.items["1"]["windowStart"] is None
-    assert api.items["1"]["windowEnd"] is None
+    path = make_xlsx(carried=[CELLS], regular=[REGULAR])
+    result = sync_workbook(path, api, local)
+    assert result["saved"] == 1 and result["regular"] == 1 and result["errors"] == []
+    assert api.import_calls[0]["n"] == 1                     # 일반점검만 보낸다
+    assert [v["checkType"] for v in api.items.values()] == ["일반점검"]
+    rows = sheet_rows(path)
+    assert len(rows) == 2                                    # 엑셀에는 그대로 남는다
+    assert next(r for r in rows if r[0] == "정기점검")[6] is None
+
+
+def test_regular_row_old_hidden_id_is_cleared(make_xlsx, tmp_path):
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(regular=[REGULAR])
+    wb = load_workbook(path)                                 # 예전 버전이 저장해 둔 DB 번호
+    wb["점검"].cell(3, 8).value = "7"
+    wb.save(path)
+    wb.close()
+    result = sync_workbook(path, api, local)
+    assert result["regular"] == 1 and result["saved"] == 0 and result["errors"] == []
+    assert api.import_calls == [{"n": 0, "collectionDate": "2026-09-23"}]
+    assert sheet_rows(path)[0][6] is None
+
+
+def test_web_edit_and_delete_of_regular_row_touch_only_the_file(make_xlsx, tmp_path, monkeypatch):
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(regular=[REGULAR])
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+    edited = [*REGULAR]
+    edited[5] = "정기점검 사유 수정"
+    assert webserver.update_excel_rows(path.name, [{"excel_row": 3, "cells": edited}])["ok"]
+    assert sheet_rows(path)[0][5] == "정기점검 사유 수정"
+    assert webserver.delete_excel_row(path.name, 3)["ok"]
+    assert sheet_rows(path) == []
+    assert api.items == {} and api.import_calls == []         # API는 한 번도 부르지 않는다
 
 
 def test_web_edit_delete_and_sort_keep_hidden_id(make_xlsx, tmp_path, monkeypatch):
