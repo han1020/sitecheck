@@ -551,3 +551,51 @@ def test_matched_list_delete_changes_nothing_when_api_down(make_xlsx, tmp_path, 
     assert len(sheet_rows(path)) == 1 and not api.items["1"]["deletedAt"]   # 엑셀·DB 그대로
     assert len(json.loads(run_json.read_text(encoding="utf-8"))["matched"]) == 1   # 목록도 그대로
     assert not (tmp_path / "config" / "matched_deletes.yaml").exists()           # 제외 목록도 그대로
+
+
+def test_excel_view_sync_updates_status_line_of_last_run(tmp_path, monkeypatch):
+    """수집 뒤 오류 행을 엑셀뷰에서 고쳐 저장(자동 동기화)하면 상태줄의 DB 결과가 그 결과로 바뀐다."""
+    from src import webserver
+    from src.datetime_parser import extract_window
+    from src.scraper import NoticeHit
+
+    api, local = FakeApi(), state(tmp_path)
+    (tmp_path / "excel").mkdir()
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path / "excel")
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "SCREENSHOT_DIR", tmp_path / "shots")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+    start_only = "2027.03.20(토) 07:00"
+
+    async def fake_scrape_all(**kwargs):
+        return [NoticeHit(site_code=CELLS[1], site_name=CELLS[2], category="BK",
+                          title="시스템 점검 안내", posted_date="2026-09-01", detail_url="",
+                          screenshot_path="", window=extract_window(start_only),
+                          schedule_text=start_only, service_text=CELLS[4], reason_text=CELLS[5])]
+    monkeypatch.setattr(webserver, "scrape_all", fake_scrape_all)
+
+    webserver._run_in_thread()
+    assert webserver.RUN_STATE["error"] == "DB 동기화 오류 1건"          # 종료 시각 없음
+    assert webserver.RUN_STATE["sync_at"] == ""
+    excel = webserver.RUN_STATE["excel"]
+    fixed = [*CELLS]
+    fixed[3] = "2027.03.20(토) 07:00 ~ 2027.03.21(일) 24:00"
+    assert webserver.update_excel_rows(excel, [{"excel_row": 3, "cells": fixed}])["ok"]
+    assert webserver.RUN_STATE["error"] == "" and webserver.RUN_STATE["sync_at"]
+    assert webserver.RUN_STATE["sync"]["errors"] == []
+    assert webserver.RUN_STATE["sync"]["saved"] >= 1
+
+
+def test_excel_view_sync_of_another_file_leaves_status_line(make_xlsx, tmp_path, monkeypatch):
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    other = make_xlsx(carried=[CELLS], name="[사이트점검]_20260101.xlsx")
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+    before = {"status": "done", "excel": "[사이트점검]_20260923.xlsx",
+              "sync": {"saved": 3, "held": [], "errors": [{"excelRow": 5, "error": "x"}]},
+              "sync_at": "", "error": "DB 동기화 오류 1건"}
+    monkeypatch.setattr(webserver, "RUN_STATE", {**webserver.RUN_STATE, **before})
+    assert webserver.sync_excel_file(other.name)["ok"]
+    assert {k: webserver.RUN_STATE[k] for k in before} == before     # 다른 날짜 파일 → 상태줄 그대로

@@ -76,6 +76,7 @@ RUN_STATE: Dict[str, Any] = {
     "error": "",
     "excel": "",
     "sync": None,
+    "sync_at": "",             # 엑셀뷰에서 마지막 수집 파일을 다시 DB 동기화한 시각 (수집 직후는 빈값)
     "progress_done": 0,        # 진행률: 처리 완료한 사이트 수
     "progress_total": 0,       # 진행률: 전체 사이트 수
     "progress_site": "",       # 진행률: 현재 처리 중 사이트명
@@ -1000,6 +1001,7 @@ def update_excel_rows(filename: str, edits: List[Dict[str, Any]]) -> Dict[str, A
                     # 저장되지 않았던 행을 고쳤다: 파일에 쓴 값으로 바로 DB에 올린다
                     response["sync"] = sync_workbook(path, *sync,
                                                      collection_date=collection_date_of(path))
+                    _note_sync(path, response["sync"])
                 return response
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc), "updated": locals().get("updated", 0)}
@@ -1123,6 +1125,16 @@ def append_excel_row(filename: str, cells: List[Any], *, action: str | None = No
     return {"ok": True, "excel_row": new_row}
 
 
+def _note_sync(path: Path, result: Dict[str, Any]) -> None:
+    """엑셀뷰에서 돌린 DB 동기화 결과를 상태줄에 반영한다. 마지막 수집이 만든 파일을 다시 보낸
+    경우에만 — 다른 날짜 파일의 결과는 그 수집의 것이 아니므로 상태줄을 건드리지 않는다."""
+    with _run_lock:
+        if RUN_STATE["status"] != "done" or RUN_STATE.get("excel") != path.name:
+            return
+        RUN_STATE.update(sync=result, sync_at=_now_str(),
+                         error=f"DB 동기화 오류 {len(result['errors'])}건" if result["errors"] else "")
+
+
 def sync_excel_file(filename: str) -> Dict[str, Any]:
     path = _excel_path(filename)
     if path is None:
@@ -1136,6 +1148,7 @@ def sync_excel_file(filename: str) -> Dict[str, Any]:
             if sync is None:
                 return {"ok": False, "error": "SITECHECK_API_BASE_URL이 설정되지 않았습니다."}
             result = sync_workbook(path, *sync, collection_date=collection_date_of(path))
+            _note_sync(path, result)
             return {"ok": not result["errors"], **result}
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -1172,6 +1185,7 @@ def decide_excel_row(filename: str, excel_row: int, action: str,
                     raise ValueError("삭제되었거나 유효하지 않은 공지는 결정 대상으로 사용할 수 없습니다.")
             state.decide(item, action, linked_id)
             result = sync_workbook(path, api, state, collection_date=collection_date_of(path))
+            _note_sync(path, result)
             return {"ok": not result["errors"], **result}
         except (NoticeApiError, ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
@@ -1328,7 +1342,7 @@ async def _collect() -> None:
             sync_error = f"DB 동기화 오류 {len(sync_result['errors'])}건"
             logger.error(f"{sync_error}: {sync_result['errors'][:3]}")
     with _run_lock:
-        RUN_STATE["sync"] = sync_result
+        RUN_STATE.update(sync=sync_result, sync_at="")
 
     # 검토 필요 탭에서 스킵 처리한 공지는 다시 올리지 않음 (스킵 탭에 기록)
     from .review_skips import filter_review_hits, load_review_skips
@@ -1767,7 +1781,8 @@ async function refreshStatus(){
     (s.finished ? ` · 마지막 실행 ${esc(s.finished)}` : (s.started ? ` · 시작 ${esc(s.started)}` : '')) +
     (s.sync && s.sync.status === 'not_configured' ? ' · DB 미연동' :
       s.sync && s.sync.status === 'skipped' ? ' · DB 동기화 건너뜀(' + esc(s.sync.reason || '') + ')' :
-      s.sync ? ' · DB 저장 ' + s.sync.saved + ' · 판단 필요 ' + s.sync.held.length +
+      s.sync ? (s.sync_at ? ' · 엑셀뷰 DB 동기화 ' + esc(s.sync_at) : '') +
+        ' · DB 저장 ' + s.sync.saved + ' · 판단 필요 ' + s.sync.held.length +
         ' · DB 오류 ' + s.sync.errors.length : '') +
     (s.error ? ` · <span style="color:#fca5a5">${esc(s.error)}</span>` : '');
   btn.disabled = (s.status === 'running');
