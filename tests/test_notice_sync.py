@@ -306,6 +306,9 @@ class DownApi(FakeApi):
     def create(self, item):
         raise NoticeApiError("API connection failed: connection refused")
 
+    def delete(self, item_id):
+        raise NoticeApiError("API connection failed: connection refused")
+
 
 def test_sync_workbook_stops_early_when_api_unreachable(make_xlsx, tmp_path):
     api, local = DownApi(), state(tmp_path)
@@ -495,3 +498,56 @@ def test_collect_skips_db_sync_when_a_site_failed(tmp_path, monkeypatch):
     assert "건너뜀" in webserver.RUN_STATE["error"]
     assert api.import_calls == [] and api.items == {}        # DB는 그대로
     assert list((tmp_path / "excel").glob("*.xlsx"))          # 엑셀·이력은 남는다
+
+
+def _run_json_with_one_hit(tmp_path: Path, run_id: str) -> Path:
+    """감지 목록 run JSON 흉내 (CELLS 공지 한 건) + 삭제 목록용 config 디렉터리."""
+    import json
+    for name in ("json", "config"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    hit = {"site_code": CELLS[1], "site_name": CELLS[2], "title": "시스템 점검 안내",
+           "schedule_text": CELLS[3], "screenshot_url": ""}
+    run_json = tmp_path / "json" / f"{run_id}.json"
+    run_json.write_text(json.dumps({"matched": [hit], "count": 1}, ensure_ascii=False),
+                        encoding="utf-8")
+    return run_json
+
+
+def test_matched_list_delete_also_soft_deletes_in_db(make_xlsx, tmp_path, monkeypatch):
+    import json
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS])                        # [사이트점검]_20260923.xlsx
+    sync_workbook(path, api, local)
+    run_json = _run_json_with_one_hit(tmp_path, "2026-09-23_1000")
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (api, local))
+
+    res = webserver.delete_matched_hit("2026-09-23_1000", 0)
+    assert res["ok"] and res["excel_deleted"] == 1 and res["db_deleted"] == 1
+    assert api.items["1"]["deletedAt"]                       # 엑셀뷰 삭제와 같은 소프트 삭제
+    assert sheet_rows(path) == []
+    assert json.loads(run_json.read_text(encoding="utf-8"))["matched"] == []
+
+
+def test_matched_list_delete_changes_nothing_when_api_down(make_xlsx, tmp_path, monkeypatch):
+    import json
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS])
+    sync_workbook(path, api, local)
+    run_json = _run_json_with_one_hit(tmp_path, "2026-09-23_1000")
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (DownApi(), local))
+
+    res = webserver.delete_matched_hit("2026-09-23_1000", 0)
+    assert not res["ok"] and "DB 삭제 실패" in res["error"]
+    assert len(sheet_rows(path)) == 1 and not api.items["1"]["deletedAt"]   # 엑셀·DB 그대로
+    assert len(json.loads(run_json.read_text(encoding="utf-8"))["matched"]) == 1   # 목록도 그대로
+    assert not (tmp_path / "config" / "matched_deletes.yaml").exists()           # 제외 목록도 그대로

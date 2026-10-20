@@ -279,11 +279,9 @@ def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, A
         if not reason:
             return {"file": filename, "deleted": 0}
 
-    deleted = 0
-    with _excel_lock:
-        wb = load_workbook(path)
-        ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
-        # 아래→위 순회: 행 삭제로 이후 행이 당겨져도 번호가 어긋나지 않음
+    def matching_rows(ws) -> List[int]:
+        # 아래→위 순서: 행 삭제로 이후 행이 당겨져도 번호가 어긋나지 않음
+        rows = []
         for r in range(ws.max_row, _XL_HEADER_ROW, -1):
             vals = [
                 str(ws.cell(row=r, column=_XL_DATA_START_COL + i).value or "").strip()
@@ -292,17 +290,39 @@ def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, A
             if vals[0] != "일반점검" or vals[1] != code:
                 continue
             if (sched and vals[3] == sched) or (not sched and vals[5] == reason):
-                ws.delete_rows(r, 1)
-                deleted += 1
-        if deleted:
-            wb.save(path)
-        wb.close()
-    return {"file": filename, "deleted": deleted}
+                rows.append(r)
+        return rows
+
+    deleted = 0
+    db_deleted = 0
+    with _excel_lock:
+        sync = configured_sync()
+        while True:
+            wb = load_workbook(path)
+            ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
+            rows = matching_rows(ws)
+            if sync is None or not rows:
+                for r in rows:
+                    ws.delete_rows(r, 1)
+                if rows:
+                    wb.save(path)
+                wb.close()
+                deleted += len(rows)
+                break
+            wb.close()
+            # API 연동 시 엑셀뷰 삭제와 같은 경로: DB 소프트 삭제 후 그 번호의 행을 지운다.
+            # 한 행씩 지우고 다시 찾는다 (같은 번호의 행이 함께 지워지면 번호가 어긋나므로)
+            result = api_delete_row(path, rows[0], *sync)
+            deleted += result["deleted"]
+            db_deleted += 1 if result["item_id"] else 0
+            if not result["deleted"]:
+                break
+    return {"file": filename, "deleted": deleted, "db_deleted": db_deleted}
 
 
 def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
-    """감지 목록에서 한 항목을 삭제: run JSON 제거 + 스크린샷 삭제 +
-    엑셀에서 해당 행 삭제 + 영구 삭제 목록(config/matched_deletes.yaml)에
+    """감지 목록에서 한 항목을 삭제: 엑셀에서 해당 행 삭제(API 연동 시 DB 공지도
+    소프트 삭제) + run JSON 제거 + 스크린샷 삭제 + 영구 삭제 목록(config/matched_deletes.yaml)에
     등록해 이후 수집에서 같은 공지가 엑셀·감지 목록에 되살아나지 않게 한다.
 
     run JSON의 matched[index] 를 제거하고 count 를 갱신한다. 인덱스는 프론트가
@@ -324,25 +344,36 @@ def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
         matched = data.get("matched") or []
         if index < 0 or index >= len(matched):
             return {"ok": False, "error": "잘못된 항목 번호입니다. 목록을 새로고침하세요."}
-        item = matched.pop(index)
-        shot_deleted = _delete_screenshot_file(item.get("screenshot_url", ""))
+        item = matched[index]
+    # 엑셀 행과 DB 공지를 먼저 지운다 — 여기서 실패하면 목록·제외 목록은 그대로라 다시 누르면 된다
+    try:
+        excel = _delete_matched_excel_rows(run_id, item)
+    except (NoticeApiError, ValueError, OSError) as e:
+        return {"ok": False, "error": f"DB 삭제 실패: {e}"}
+    with _json_lock:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        matched = data.get("matched") or []
+        if item in matched:   # 그 사이 목록이 바뀌었을 수 있어 번호가 아니라 내용으로 지운다
+            matched.remove(item)
         data["matched"] = matched
         data["count"] = len(matched)
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    shot_deleted = _delete_screenshot_file(item.get("screenshot_url", ""))
     from .matched_deletes import add_matched_delete
     listed = add_matched_delete(
         CONFIG_DIR / "matched_deletes.yaml",
         item.get("site_code", ""), item.get("title", ""),
         item.get("schedule_text", ""),
     )
-    excel = _delete_matched_excel_rows(run_id, item)
     logger.info(
         f"감지 항목 삭제: {run_id} [{index}] {item.get('site_code')} "
         f"{str(item.get('title',''))[:30]} | 스샷삭제={shot_deleted} "
-        f"| 삭제목록 추가={listed} | 엑셀 {excel['file']} {excel['deleted']}행 삭제"
+        f"| 삭제목록 추가={listed} | 엑셀 {excel['file']} {excel['deleted']}행 삭제 "
+        f"| DB 삭제 {excel['db_deleted']}건"
     )
     return {"ok": True, "screenshot_deleted": shot_deleted,
-            "excel_file": excel["file"], "excel_deleted": excel["deleted"]}
+            "excel_file": excel["file"], "excel_deleted": excel["deleted"],
+            "db_deleted": excel["db_deleted"]}
 
 
 def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
@@ -2148,7 +2179,7 @@ async function deleteRun(){
 }
 
 async function deleteMatched(i, btn){
-  if(!confirm('이 감지 항목을 삭제할까요?\\n\\n캡처 스크린샷과 엑셀의 해당 행도 함께 삭제되고,\\n앞으로의 수집에서도 다시 올라오지 않습니다.')) return;
+  if(!confirm('이 감지 항목을 삭제할까요?\\n\\n캡처 스크린샷과 엑셀의 해당 행이 함께 삭제되고 DB의 공지도 삭제 처리되며,\\n앞으로의 수집에서도 다시 올라오지 않습니다.')) return;
   btn.disabled = true;
   const r = await fetch('/api/matched/delete', {
     method: 'POST', headers: {'Content-Type':'application/json'},

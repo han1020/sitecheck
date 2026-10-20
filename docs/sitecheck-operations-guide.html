@@ -312,7 +312,7 @@ systemctl enable --now sitecheck-collect.timer             <span class="c"># 자
   <ul class="tight">
     <li><strong>수집이 끝났을 때</strong> — 엑셀 파일이 저장된 직후, 그 파일의 모든 행(일반점검 + 정기점검)을 <strong>한 번의 요청</strong>으로 API에 보냅니다. 요청에는 수집일(엑셀 파일 날짜)이 실립니다. 수집한 원본이 아니라 <em>엑셀의 최종 행</em>을 보내는 이유는, 엑셀에는 전날에서 이어진 행(carryover)과 담당자가 고친 값이 들어 있기 때문입니다. <strong>기관 하나라도 수집에 실패하면 그 회차는 DB에 보내지 않습니다</strong>(상태줄 "DB 동기화 건너뜀"). 새 공지가 0건이어도 "완료" 요청은 보내며, 그래야 서버가 이전 날짜의 신규 표시를 지웁니다.</li>
     <li><strong>엑셀뷰에서 DB 동기화 버튼을 눌렀을 때</strong> — 선택한 파일을 통째로 다시 보냅니다. 판단 필요 행을 처리한 뒤나 오류 뒤 재시도에 씁니다.</li>
-    <li><strong>엑셀뷰에서 편집·삭제·검토 탭 공지추가를 했을 때</strong> — 그 행만 즉시 API를 거친 뒤(수정은 PATCH, 삭제는 DELETE, 추가는 저장) 파일에 반영합니다. API가 실패하면 파일도 바뀌지 않습니다. 아직 DB에 없는 행(종료 시각이 없어 저장되지 않은 행 등, 숨은 H열 번호가 없음)은 고친 값을 파일에 쓴 뒤 바로 DB에 올리고, 삭제는 파일에서만 지웁니다.</li>
+    <li><strong>엑셀뷰에서 편집·삭제, 감지 목록의 휴지통, 검토 탭 공지추가를 했을 때</strong> — 그 행만 즉시 API를 거친 뒤(수정은 PATCH, 삭제는 DELETE, 추가는 저장) 파일에 반영합니다. API가 실패하면 파일도 바뀌지 않습니다. 아직 DB에 없는 행(종료 시각이 없어 저장되지 않은 행 등, 숨은 H열 번호가 없음)은 고친 값을 파일에 쓴 뒤 바로 DB에 올리고, 삭제는 파일에서만 지웁니다.</li>
   </ul>
   <h3>4-2. 무엇이 저장되나</h3>
   <div class="tbl"><table>
@@ -439,6 +439,7 @@ WHERE del_dt IS NULL AND check_type = '정기점검';</code></pre>
       <tr><td>상태줄 "DB 미연동"</td><td>API 설정 없이 떠 있음</td><td><code>docker compose --env-file /etc/sitecheck/api.env up -d web</code>로 다시 기동</td></tr>
       <tr><td>"DB 동기화 오류 n건", 로그의 <code>excelRow: 0 … API 연결 실패</code> (0행 = 특정 행이 아니라 파일 전체)</td><td>API 서버(9092)에 닿지 못함 또는 인증 거부</td><td>188에서 <code>curl -m 5 http://&lt;API 서버 IP&gt;:9092/api/health</code> — 주소를 열어 보는 명령. <code>"status":"UP"</code>이 나오면 서버는 살아 있는 것이고, 아무 응답이 없으면 네트워크 문제. 그래도 오류면 <code>api.env</code>의 헤더 값(<code>@gowid.com</code> 주소)을 확인. 복구 후 다음 수집이 자동 재전송</td></tr>
       <tr><td>로그의 특정 행 오류 (길이 초과·구분 오류·시작&gt;종료)</td><td>그 행의 값이 DB 규칙에 안 맞음</td><td>엑셀뷰에서 그 행을 고친 뒤 DB 동기화</td></tr>
+      <tr><td>감지 목록에서 지운 공지가 DB에 남아 있음(<code>del_dt</code>가 NULL)</td><td>2026-10-20 이전 버전의 휴지통은 엑셀 행만 지우고 DB는 건드리지 않았음. 지금 버전은 엑셀뷰 삭제와 똑같이 DB까지 지움</td><td>남은 건은 DB에서 <code>item_id</code>를 확인한 뒤 188에서 <code>set -a; . /etc/sitecheck/api.env; set +a</code> 다음 <code>.venv/bin/python -c "from src.notice_api import NoticeApi; api = NoticeApi.from_env(); print([api.delete(i)['status'] for i in ['101', '102']])"</code> (번호는 실제 값으로) — 출력 <code>['DELETED', 'DELETED']</code></td></tr>
       <tr><td>"일시가 달라지면 새 공지로 등록합니다" 확인창</td><td>일시 변경 = 새 공지</td><td>수락하면 새 ID. 기존 공지는 필요 시 행 삭제</td></tr>
       <tr><td>"삭제된 공지는 다시 등록할 수 없습니다."</td><td>소프트 삭제된 공지와 같은 값</td><td>되살리려면 DB 담당자가 <code>del_dt</code> 해제 후 DB 동기화</td></tr>
       <tr><td>DB를 새로 만든 뒤 <code>ITEM_NOT_FOUND … itemId=77</code> 오류</td><td>엑셀 H열·결정 파일에 남은 옛 공지 번호가 새 DB에 없음</td><td>10-14 이후 코드는 옛 번호를 자동으로 버리고 다시 저장하므로 <strong>DB 동기화</strong>를 한 번 더 누르면 끝. 그 이전 코드라면 결정 파일을 치우고(<code>mv output/state/production/notice_state.json …bak</code>) 엑셀 H열을 비운 뒤 동기화</td></tr>
