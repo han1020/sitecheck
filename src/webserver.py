@@ -252,23 +252,20 @@ def _delete_screenshot_file(screenshot_url: str) -> bool:
 _json_lock = threading.Lock()
 
 
-def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
-    """감지 항목과 일치하는 엑셀 '일반점검' 행 삭제. {file, deleted} 반환.
+def _matched_excel_target(run_id: str, item: Dict[str, Any]):
+    """감지 항목과 일치하는 엑셀 '일반점검' 행을 찾는 대상 파일과 판별 함수.
 
     run 날짜의 엑셀 파일에서 (기관코드, 일시)로 찾는다. 일시가 없는 항목은
-    (기관코드, 사유)로 대조. run 날짜 파일이 없으면(옛 run에서 삭제) 최신
-    엑셀 파일을 대상으로 한다 — 행은 carryover로 최신 파일에 살아 있다.
+    (기관코드, 사유)로 대조. run 날짜 파일이 없으면(옛 run) 최신 엑셀 파일을
+    대상으로 한다 — 행은 carryover로 최신 파일에 살아 있다.
+    반환: (filename, path|None, matching_rows(ws) -> 아래→위 행 번호 목록)
     """
     date_compact = run_id.split("_", 1)[0].replace("-", "")
     filename = f"{_EXCEL_PREFIX}{date_compact}.xlsx"
     if _excel_path(filename) is None:
         excels = _list_excels()
-        if not excels:
-            return {"file": "", "deleted": 0}
-        filename = excels[0]["filename"]
-    path = _excel_path(filename)
-    if path is None:
-        return {"file": "", "deleted": 0}
+        filename = excels[0]["filename"] if excels else ""
+    path = _excel_path(filename) if filename else None
 
     code = str(item.get("site_code") or "").strip()
     sched = str(item.get("schedule_text") or "").strip()
@@ -278,7 +275,7 @@ def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, A
         reason = _resolve_reason_text(item.get("title", ""),
                                       item.get("reason_text", ""))
         if not reason:
-            return {"file": filename, "deleted": 0}
+            path = None
 
     def matching_rows(ws) -> List[int]:
         # 아래→위 순서: 행 삭제로 이후 행이 당겨져도 번호가 어긋나지 않음
@@ -293,6 +290,15 @@ def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, A
             if (sched and vals[3] == sched) or (not sched and vals[5] == reason):
                 rows.append(r)
         return rows
+
+    return filename, path, matching_rows
+
+
+def _delete_matched_excel_rows(run_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
+    """감지 항목과 일치하는 엑셀 '일반점검' 행 삭제. {file, deleted} 반환 (대상은 _matched_excel_target)."""
+    filename, path, matching_rows = _matched_excel_target(run_id, item)
+    if path is None:
+        return {"file": filename, "deleted": 0, "db_deleted": 0}
 
     deleted = 0
     db_deleted = 0
@@ -375,6 +381,74 @@ def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
     return {"ok": True, "screenshot_deleted": shot_deleted,
             "excel_file": excel["file"], "excel_deleted": excel["deleted"],
             "db_deleted": excel["db_deleted"]}
+
+
+def edit_matched_hit(run_id: str, index: int, schedule: str, service: str,
+                     reason: str) -> Dict[str, Any]:
+    """감지 목록 '수정' 팝업: 일치하는 엑셀 '일반점검' 행의 일시·업무·사유를 고치고
+    run JSON 항목도 같은 값으로 갱신한다. DB는 건드리지 않는다 — 엑셀뷰 'DB 동기화'로 일괄 반영.
+    """
+    schedule, service, reason = (str(v or "").strip() for v in (schedule, service, reason))
+    if not schedule:
+        return {"ok": False, "error": "일시를 입력하세요."}
+    if not reason:
+        return {"ok": False, "error": "사유를 입력하세요."}
+    if not run_id:
+        return {"ok": False, "error": "실행 ID가 없습니다."}
+    p = JSON_DIR / f"{run_id}.json"
+    if not p.exists():
+        return {"ok": False, "error": "실행 기록을 찾을 수 없습니다."}
+    with _run_lock:
+        if RUN_STATE.get("status") == "running":
+            return {"ok": False, "error": "수집 중에는 수정할 수 없습니다. 잠시 후 다시 시도하세요."}
+    with _json_lock:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"기록 읽기 실패: {e}"}
+        matched = data.get("matched") or []
+        if index < 0 or index >= len(matched):
+            return {"ok": False, "error": "잘못된 항목 번호입니다. 목록을 새로고침하세요."}
+        item = matched[index]
+
+    filename, path, matching_rows = _matched_excel_target(run_id, item)
+    updated = 0
+    if path is not None:
+        with _excel_lock:
+            wb = load_workbook(path)  # 스타일 보존 (H열 itemId도 그대로 → 동기화 때 같은 공지로 갱신)
+            ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
+            rows = matching_rows(ws)
+            for r in rows:
+                ws.cell(row=r, column=_XL_DATA_START_COL + 3).value = schedule
+                ws.cell(row=r, column=_XL_DATA_START_COL + 4).value = service
+                ws.cell(row=r, column=_XL_DATA_START_COL + 5).value = reason
+            if rows:
+                wb.save(path)
+            wb.close()
+            updated = len(rows)
+    if not updated:
+        return {"ok": False, "excel_file": filename,
+                "error": "엑셀에서 이 공지의 행을 찾지 못했습니다. (이미 지웠거나 엑셀뷰에서 일시를 "
+                         "손으로 고친 경우) 엑셀뷰에서 직접 수정하세요."}
+
+    from .datetime_parser import extract_window
+    win = extract_window(schedule)
+    with _json_lock:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        matched = data.get("matched") or []
+        if item in matched:   # 그 사이 목록이 바뀌었을 수 있어 번호가 아니라 내용으로 찾는다
+            item = matched[matched.index(item)]
+            item["schedule_text"] = schedule
+            item["service_text"] = service
+            item["reason_text"] = reason
+            item["window_start"] = win.start.isoformat() if win and win.start else ""
+            item["window_end"] = win.end.isoformat() if win and win.end else ""
+            item["service_default"] = service == DEFAULT_SERVICE_TEXT
+            item["edited"] = True
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"감지 항목 수정: {run_id} [{index}] {item.get('site_code')} | 엑셀 {filename} "
+                f"{updated}행 | {schedule} / {service} / {reason[:30]}")
+    return {"ok": True, "excel_file": filename, "excel_updated": updated}
 
 
 def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
@@ -1493,6 +1567,13 @@ _INDEX_HTML = """<!DOCTYPE html>
   .add-btn:disabled { background: #9ca3af; cursor: default; }
   .add-btn.added { background: #dcfce7; color: #166534; }
   td.delcell { text-align: center; width: 44px; }
+  td.delcell.wide { width: 96px; white-space: nowrap; }
+  .edit-btn { background: #e0e7ff; color: #3730a3; border: 0; border-radius: 5px;
+              padding: 4px 9px; cursor: pointer; font-size: 13px; margin-right: 4px; }
+  .edit-btn:hover { background: #c7d2fe; }
+  .edit-btn:disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
+  .edited-badge { display: inline-block; background: #e0e7ff; color: #3730a3; border-radius: 4px;
+                  font-size: 11px; padding: 0 5px; margin-right: 4px; vertical-align: middle; }
   td.ordcell { text-align: center; width: 76px; white-space: nowrap; }
   .drag-handle { cursor: grab; color: #9ca3af; margin-right: 4px; user-select: none; }
   .drag-handle:hover { color: #4b5563; }
@@ -1513,6 +1594,24 @@ _INDEX_HTML = """<!DOCTYPE html>
     align-items: center; justify-content: center; z-index: 60; }
   #addOverlay .add-box { background: #fff; max-width: 560px; width: 92%; max-height: 88vh;
     border-radius: 8px; padding: 20px 24px; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,.35); }
+  #addOverlay .add-box.with-ref { max-width: 1180px; display: flex; gap: 22px; overflow: hidden; }
+  #addOverlay .add-form { flex: 0 0 420px; min-width: 0; overflow-y: auto; }
+  #addOverlay .add-ref { display: none; flex: 1 1 auto; min-width: 0; flex-direction: column;
+    border-left: 1px solid #e5e7eb; padding-left: 22px; }
+  #addOverlay .add-box.with-ref .add-ref { display: flex; }
+  #addOverlay .add-ref-head { display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12.5px; font-weight: 600; color: #374151; margin-bottom: 8px; }
+  #addOverlay .add-ref-head a { font-weight: 400; }
+  #addOverlay .add-ref-body { flex: 1 1 auto; overflow-y: auto; max-height: calc(88vh - 80px);
+    white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.6; color: #1f2937;
+    background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; }
+  #addOverlay .add-ref-body img { max-width: 100%; display: block; }
+  @media (max-width: 900px) {
+    #addOverlay .add-box.with-ref { flex-direction: column; overflow-y: auto; }
+    #addOverlay .add-form { flex: none; overflow: visible; }
+    #addOverlay .add-ref { border-left: 0; padding-left: 0; border-top: 1px solid #e5e7eb; padding-top: 14px; }
+    #addOverlay .add-ref-body { max-height: 50vh; }
+  }
   #addOverlay h3 { margin: 0 0 4px; font-size: 16px; }
   #addOverlay .add-site { font-size: 12.5px; color: #6b7280; margin-bottom: 14px; word-break: break-all; }
   #addOverlay label { display: block; font-size: 12.5px; font-weight: 600; color: #374151; margin: 10px 0 4px; }
@@ -1614,7 +1713,7 @@ _INDEX_HTML = """<!DOCTYPE html>
     <table>
       <thead><tr>
         <th>분류</th><th>기관코드</th><th>기관명</th><th>제목</th><th>점검 일시</th>
-        <th>업무</th><th>사유</th><th>원문</th><th>캡처</th><th>삭제</th>
+        <th>업무</th><th>사유</th><th>원문</th><th>캡처</th><th>수정·삭제</th>
       </tr></thead>
       <tbody id="rows"><tr><td colspan="10" class="muted">데이터가 없습니다. ‘지금 수집’을 눌러 실행하세요.</td></tr></tbody>
     </table>
@@ -1743,10 +1842,11 @@ _INDEX_HTML = """<!DOCTYPE html>
   </div>
 </div>
 <div id="addOverlay" onclick="if(event.target===this)closeAddModal()">
-  <div class="add-box">
-    <h3>엑셀에 공지 추가</h3>
+  <div class="add-box" id="addBox">
+   <div class="add-form">
+    <h3 id="addTitle">엑셀에 공지 추가</h3>
     <div class="add-site" id="addSite"></div>
-    <label>일시<span class="hint">예: 2026.09.20(일) 00:00 ~ 06:00</span></label>
+    <label>일시<span class="hint" id="addSchedHint">예: 2026.09.20(일) 00:00 ~ 06:00</span></label>
     <input id="addSchedule" type="text" placeholder="점검 일시"/>
     <label>업무<span class="hint">영향받는 서비스</span></label>
     <input id="addService" type="text" placeholder="예: 인터넷뱅킹, 모바일뱅킹 전체"/>
@@ -1760,6 +1860,11 @@ _INDEX_HTML = """<!DOCTYPE html>
       <button class="cancel-btn" onclick="closeAddModal()">취소</button>
       <button class="add-btn" id="addSubmit" onclick="submitAddModal()">엑셀에 추가</button>
     </div>
+   </div>
+   <div class="add-ref">
+    <div class="add-ref-head"><span id="addRefLabel">공지 본문</span><a id="addRefLink" href="#" target="_blank">원문 열기</a></div>
+    <div class="add-ref-body" id="addRefBody"></div>
+   </div>
   </div>
 </div>
 
@@ -1882,13 +1987,15 @@ async function loadRun(runId){
         <td><span class="tag">${esc(h.category)}</span></td>
         <td>${esc(h.site_code)}</td>
         <td>${esc(h.site_name)}</td>
-        <td class="title-cell">${regBadge}${ocrBadge}${h.body_text ? `<span class="title-link" title="클릭하면 공지 본문을 봅니다" onclick="showBody(curMatched[${i}])">${esc(h.title)}</span>` : esc(h.title)}</td>
+        <td class="title-cell">${h.edited ? '<span class="edited-badge" title="감지목록에서 수정한 항목입니다">수정됨</span>' : ''}${regBadge}${ocrBadge}${h.body_text ? `<span class="title-link" title="클릭하면 공지 본문을 봅니다" onclick="showBody(curMatched[${i}])">${esc(h.title)}</span>` : esc(h.title)}</td>
         ${schedCell}
         ${svcCell}
         <td>${esc(h.reason_text || h.title)}</td>
         <td>${h.detail_url ? `<a href="${esc(h.detail_url)}" target="_blank">열기</a>` : '<span class="muted">-</span>'}</td>
         <td>${h.screenshot_url ? `<img class="thumb" src="${esc(h.screenshot_url)}" onclick="zoom('${esc(h.screenshot_url)}')"/>` : '<span class="muted">-</span>'}</td>
-        <td class="delcell"><button class="del-btn" title="항목+스샷 삭제" onclick="deleteMatched(${i}, this)">🗑</button></td>
+        <td class="delcell wide">${h.is_regular
+          ? `<button class="edit-btn" disabled title="정기점검 행은 정기점검 탭에서 수정합니다">수정</button>`
+          : `<button class="edit-btn" title="일시·업무·사유를 고쳐 엑셀에 반영합니다 (DB는 엑셀뷰 'DB 동기화'로)" onclick="editMatched(${i}, this)">수정</button>`}<button class="del-btn" title="항목+스샷 삭제" onclick="deleteMatched(${i}, this)">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -2234,20 +2341,99 @@ async function skipReview(i, btn){
 // ---- 검토 → 엑셀 추가 팝업 ----
 // 시스템이 붙인 설명(검토 사유)은 엑셀 '사유'로 쓰기 부적절하므로 제목으로 대체
 const _SYS_REASON_RE = /확인 필요|강제 검토 마커|외부 기관\\(/;
-let addTarget = null;   // {h, btn}
+let addTarget = null;   // {h, btn, mode:'add'|'edit', index}
+const _SCHED_HINT = '예: 2026.09.20(일) 00:00 ~ 06:00';
+
+// 팝업 오른쪽에 공지 본문(없으면 캡처)을 띄워 보면서 입력
+function setModalRef(h){
+  const box = document.getElementById('addBox');
+  const body = document.getElementById('addRefBody');
+  const link = document.getElementById('addRefLink');
+  body.innerHTML = '';
+  if(h.body_text){
+    document.getElementById('addRefLabel').textContent = '공지 본문';
+    body.textContent = h.body_text;
+  } else if(h.screenshot_url){
+    document.getElementById('addRefLabel').textContent = '캡처 (본문 없음)';
+    const img = document.createElement('img');
+    img.src = h.screenshot_url;
+    body.appendChild(img);
+  }
+  link.style.display = h.detail_url ? '' : 'none';
+  link.href = h.detail_url || '#';
+  box.classList.toggle('with-ref', !!(h.body_text || h.screenshot_url));
+  body.scrollTop = 0;
+}
+
+function setModalMode(mode){
+  const edit = mode === 'edit';
+  document.getElementById('addTitle').textContent = edit ? '감지 공지 수정' : '엑셀에 공지 추가';
+  document.getElementById('addSchedHint').textContent = edit
+    ? '바꾸면 다음 수집 때 원래 일시 행이 따로 다시 생길 수 있습니다' : _SCHED_HINT;
+  const sb = document.getElementById('addSubmit');
+  sb.disabled = false; sb.textContent = edit ? '수정' : '엑셀에 추가';
+}
+
+// ---- 감지 목록 → 수정 팝업 (엑셀 파일만, DB는 엑셀뷰 'DB 동기화'로 일괄) ----
+function editMatched(i, btn){
+  const h = curMatched[i];
+  if(!h){ return; }
+  addTarget = {h, btn, mode: 'edit', index: i};
+  document.getElementById('addSite').textContent = `[${h.site_code || ''}] ${h.site_name || ''} · ${h.title || ''}`;
+  document.getElementById('addSchedule').value = h.schedule_text || '';
+  document.getElementById('addService').value = h.service_text || '';
+  const rt = (h.reason_text || '').trim();
+  document.getElementById('addReason').value = rt || (h.title || '');
+  setModalMode('edit');
+  setModalRef(h);
+  document.getElementById('addDecisionWrap').style.display = 'none';
+  document.getElementById('addDecision').innerHTML = '';
+  document.getElementById('addOverlay').style.display = 'flex';
+  document.getElementById('addSchedule').focus();
+}
+
+async function submitEditModal(){
+  const {btn, index} = addTarget;
+  const schedule = document.getElementById('addSchedule').value.trim();
+  const service  = document.getElementById('addService').value.trim();
+  const reason   = document.getElementById('addReason').value.trim();
+  if(!schedule){ alert('일시를 입력하세요.'); document.getElementById('addSchedule').focus(); return; }
+  if(!reason){ alert('사유를 입력하세요.'); document.getElementById('addReason').focus(); return; }
+  const sb = document.getElementById('addSubmit');
+  sb.disabled = true; sb.textContent = '수정 중…';
+  btn.disabled = true;
+  let res;
+  try {
+    const r = await fetch('/api/matched/edit', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({run_id: curRunId, index, schedule, service, reason}),
+    });
+    res = await r.json();
+  } catch(e){ res = {ok:false, error:String(e)}; }
+  if(res.ok){
+    closeAddModal();
+    await loadRun(curRunId);
+    // 엑셀뷰가 같은 파일을 보고 있으면 즉시 갱신
+    if(curExcelFile && curExcelFile === res.excel_file) loadExcel(curExcelFile);
+  } else {
+    sb.disabled = false; sb.textContent = '수정';
+    btn.disabled = false;
+    alert('수정 실패: ' + (res.error || ''));
+  }
+}
 
 function addToExcel(i, btn){
   const h = curReview[i];
   if(!h){ return; }
   if(!curExcelName){ alert('대상 엑셀을 찾을 수 없습니다.'); return; }
-  addTarget = {h, btn};
+  addTarget = {h, btn, mode: 'add'};
   document.getElementById('addSite').textContent = `[${h.site_code || ''}] ${h.site_name || ''} · ${h.title || ''}`;
   document.getElementById('addSchedule').value = h.schedule_text || '';
   document.getElementById('addService').value = h.service_text || '';
   const rt = (h.reason_text || '').trim();
   document.getElementById('addReason').value = (rt && !_SYS_REASON_RE.test(rt)) ? rt : (h.title || '');
-  const sb = document.getElementById('addSubmit');
-  sb.disabled = false; sb.textContent = '엑셀에 추가';
+  setModalMode('add');
+  setModalRef(h);
   document.getElementById('addDecisionWrap').style.display = 'none';
   document.getElementById('addDecision').innerHTML = '';
   document.getElementById('addOverlay').style.display = 'flex';
@@ -2261,6 +2447,7 @@ function closeAddModal(){
 
 async function submitAddModal(){
   if(!addTarget) return;
+  if(addTarget.mode === 'edit') return submitEditModal();
   const {h, btn} = addTarget;
   const schedule = document.getElementById('addSchedule').value.trim();
   const service  = document.getElementById('addService').value.trim();
@@ -2781,6 +2968,13 @@ class Handler(BaseHTTPRequestHandler):
             # 주의: `or -1` 폴백은 index=0(falsy)까지 -1로 만든다 — 명시적 None 체크
             idx = body.get("index")
             res = delete_matched_hit(body.get("run_id", ""), int(idx) if idx is not None else -1)
+            self._send_json(res, 200 if res.get("ok") else 400); return
+        if parsed.path == "/api/matched/edit":
+            body = self._read_body()
+            idx = body.get("index")
+            res = edit_matched_hit(body.get("run_id", ""), int(idx) if idx is not None else -1,
+                                   body.get("schedule", ""), body.get("service", ""),
+                                   body.get("reason", ""))
             self._send_json(res, 200 if res.get("ok") else 400); return
         if parsed.path == "/api/run/delete":
             body = self._read_body()

@@ -553,6 +553,53 @@ def test_matched_list_delete_changes_nothing_when_api_down(make_xlsx, tmp_path, 
     assert not (tmp_path / "config" / "matched_deletes.yaml").exists()           # 제외 목록도 그대로
 
 
+def test_matched_list_edit_writes_excel_only_and_updates_run_json(make_xlsx, tmp_path, monkeypatch):
+    """감지 목록 '수정' 팝업: 엑셀 행·run JSON만 고치고 DB는 건드리지 않는다 (동기화는 엑셀뷰에서 일괄)."""
+    import json
+    from src import webserver
+
+    api, local = FakeApi(), state(tmp_path)
+    path = make_xlsx(carried=[CELLS])
+    sync_workbook(path, api, local)
+    before = json.dumps(api.items, sort_keys=True, ensure_ascii=False)
+    run_json = _run_json_with_one_hit(tmp_path, "2026-09-23_1000")
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: (DownApi(), local))  # 불리면 실패
+
+    new_sched = "2026.09.27(일) 01:00 ~ 05:00"
+    res = webserver.edit_matched_hit("2026-09-23_1000", 0, new_sched, "모바일뱅킹", "전산 장비 교체")
+    assert res["ok"] and res["excel_updated"] == 1
+    rows = sheet_rows(path)
+    assert len(rows) == 1 and rows[0][3:6] == [new_sched, "모바일뱅킹", "전산 장비 교체"]
+    assert rows[0][1] == CELLS[1]
+    assert json.dumps(api.items, sort_keys=True, ensure_ascii=False) == before   # DB 그대로
+    item = json.loads(run_json.read_text(encoding="utf-8"))["matched"][0]
+    assert (item["schedule_text"], item["service_text"], item["reason_text"]) == \
+        (new_sched, "모바일뱅킹", "전산 장비 교체")
+    assert item["edited"] and item["window_end"].startswith("2026-09-27T05:00")
+
+    # 고친 일시로 다시 찾으므로 두 번째 수정도 같은 행에 들어간다
+    res = webserver.edit_matched_hit("2026-09-23_1000", 0, new_sched, "전체", "전산 장비 교체")
+    assert res["ok"] and sheet_rows(path)[0][4] == "전체"
+
+
+def test_matched_list_edit_reports_missing_excel_row(make_xlsx, tmp_path, monkeypatch):
+    import json
+    from src import webserver
+
+    make_xlsx(carried=[])
+    run_json = _run_json_with_one_hit(tmp_path, "2026-09-23_1000")
+    monkeypatch.setattr(webserver, "EXCEL_DIR", tmp_path)
+    monkeypatch.setattr(webserver, "JSON_DIR", tmp_path / "json")
+    monkeypatch.setattr(webserver, "configured_sync", lambda: None)
+
+    res = webserver.edit_matched_hit("2026-09-23_1000", 0, "2026.09.27(일) 01:00 ~ 05:00", "", "사유")
+    assert not res["ok"] and "찾지 못했습니다" in res["error"]
+    assert json.loads(run_json.read_text(encoding="utf-8"))["matched"][0]["schedule_text"] == CELLS[3]
+
+
 def test_excel_view_sync_updates_status_line_of_last_run(tmp_path, monkeypatch):
     """수집 뒤 오류 행을 엑셀뷰에서 고쳐 저장(자동 동기화)하면 상태줄의 DB 결과가 그 결과로 바뀐다."""
     from src import webserver
