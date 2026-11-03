@@ -95,7 +95,7 @@ python serve.py --host 0.0.0.0 --port 9095   # 사내망 등 외부 접속 허�
   - 파일 선택 옆 **🗑 파일 삭제**: 선택한 엑셀 파일 자체를 삭제. 다음 수집의 carryover는 남아 있는 가장 최근 엑셀을 기준으로 하므로 최신 파일을 지우면 그 파일에만 있던 일반점검 행은 이어지지 않습니다.
   - 수집이 진행 중(`status: running`)일 때는 편집/삭제가 거부됩니다(파일 충돌 방지).
 - **정기점검 탭**: `config/regular_maintenance.yaml`의 baseline을 표로 표시하고 **바로 편집** 가능 (셀 편집·행 추가/삭제 → 저장 시 YAML 재작성, 재파싱 검증 포함). 엑셀에는 다음 수집부터 반영.
-- **제외 키워드 탭**: `keywords.yaml`의 7개 섹션(include / include_review / exclude / exclude_title / exclude_body / external_orgs / institution_aliases)을 인라인 주석과 함께 표시하고 **바로 편집** 가능. 섹션마다 입력 칸(키워드 + 메모)으로 추가, 칩의 ×로 삭제하면 YAML에 즉시 저장(기존 주석·순서 보존, 재파싱 검증). 수집은 시작 시 파일을 읽으므로 **다음 수집부터 적용** — 바로 반영하려면 '지금 수집'.
+- **제외 키워드 탭**: `keywords.yaml`의 7개 섹션(include / include_review / exclude / exclude_title / exclude_body / external_orgs / institution_aliases)을 인라인 주석과 함께 표시하고 **바로 편집** 가능. 섹션마다 입력 칸(키워드 + 메모)과 파란 **추가** 버튼으로 추가, 칩의 ×로 삭제하면 YAML에 즉시 저장(기존 주석·순서 보존, 재파싱 검증). 수집은 시작 시 파일을 읽으므로 **다음 수집부터 적용** — 바로 반영하려면 '지금 수집'.
 - **업데이트 내역 탭**: README의 '최근 변경' 섹션을 월별로 보여준다. 최근 두 달은 펼쳐져 있고 그 이전 달은 월 제목을 눌러 펼친다. README를 수정하면 다음 새로고침에 반영.
 
 수집 결과는 `output/json/`에 회차별 JSON으로도 저장되어 감지 목록·스킵 히스토리로 쌓입니다.
@@ -424,6 +424,11 @@ logs/
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-11)
+
+### 제외 키워드 탭 '추가' 버튼 색 (2026-11-03)
+
+- **문제**: 제외 키워드 탭의 섹션별 **추가** 버튼이 거의 보이지 않았음. 공통 `button` 스타일의 흰 글자색(`#fff`)은 그대로 둔 채 `.kw-add button`이 배경만 연회색(`#f8fafc`)으로 바꿔 흰 바탕에 흰 글씨가 됐음.
+- **변경**: `.kw-add button`을 대시보드 기본 버튼과 같은 파란 배경(`#2563eb`) + 흰 글씨 + 굵게로, hover `#1d4ed8`, 비활성 회색.
 
 ### SBI저축은행 → 교보SBI저축은행 사명·도메인 변경 (2026-11-03)
 

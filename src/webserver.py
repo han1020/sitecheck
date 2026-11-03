@@ -1667,9 +1667,10 @@ _INDEX_HTML = """<!DOCTYPE html>
   .kw-add { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
   .kw-add input { border: 1px solid #d1d5db; border-radius: 6px; padding: 5px 8px; font-size: 13px; }
   .kw-add input.kw { width: 180px; } .kw-add input.memo { flex: 1; min-width: 200px; }
-  .kw-add button { border: 1px solid #d1d5db; background: #f8fafc; border-radius: 6px; padding: 5px 12px;
-    font-size: 13px; cursor: pointer; }
-  .kw-add button:hover { background: #eef2ff; }
+  .kw-add button { border: 0; background: #2563eb; color: #fff; border-radius: 6px; padding: 5px 14px;
+    font-size: 13px; font-weight: 600; cursor: pointer; }
+  .kw-add button:hover { background: #1d4ed8; }
+  .kw-add button:disabled { background: #9ca3af; cursor: default; }
 </style>
 </head>
 <body>
