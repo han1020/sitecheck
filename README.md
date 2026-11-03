@@ -212,7 +212,7 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 |------|--------|------|--------|
 | KRBK0101 | 저축은행중앙회(통합) | KRBK0108 | 하나저축은행 |
 | KRBK0102 | 대신저축은행 | KRBK0109 | DB저축은행 |
-| KRBK0103 | SBI저축은행 | KRBK0110 | NH저축은행 |
+| KRBK0103 | 교보SBI저축은행 (舊 SBI저축은행) | KRBK0110 | NH저축은행 |
 | KRBK0104 | 애큐온저축은행 | KRBK0111 | OSB저축은행 |
 | KRBK0105 | 웰컴저축은행 | KRBK0112 | BNK저축은행 |
 | KRBK0106 | KB저축은행 | KRBK0113 | 신한저축은행 |
@@ -276,7 +276,8 @@ institution_aliases:   # sites.yaml 표기와 다른 기관명 변형 (명부에
 > 스크린샷은 정상 저장되지만, 본문 텍스트가 없어 점검 일시를 자동 파싱할 수 없습니다.
 > 제목에 날짜가 없는 점검 공지는 수집되지 않습니다.
 >
-> **SBI저축은행(KRBK0103)**: 응답이 AES-256-CBC로 암호화되어 in-process로 복호화합니다(`pycryptodome`).
+> **교보SBI저축은행(KRBK0103, 舊 SBI저축은행)**: 응답이 AES-256-CBC로 암호화되어 in-process로 복호화합니다(`pycryptodome`).
+> 2026-11 사명 변경으로 도메인이 `www.kyobosbi.com`으로 이전(목록 화면 `/cus0080100.act`), 데이터 API(`/cum0020300A01.jct`·`/cum0020400A01.jct`)와 키는 그대로입니다.
 >
 > **푸른저축은행(KRBK0107)**: 응답 필드가 EXAFE E2E(HMAC-SHA1 TOTP 키유도 + AES-128-CBC 이중 복호화)로 암호화되어 in-process로 복호화합니다.
 >
@@ -423,6 +424,12 @@ logs/
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-11)
+
+### SBI저축은행 → 교보SBI저축은행 사명·도메인 변경 (2026-11-03)
+
+- **배경**: SBI저축은행이 교보SBI저축은행으로 사명을 바꾸고 사이트를 `www.sbisb.co.kr` → `www.kyobosbi.com`으로 옮김(공지 목록 `https://www.kyobosbi.com/cus0080100.act`).
+- **확인**: 새 사이트도 같은 JEX 프레임워크라 목록·상세 API(`cum0020300A01.jct`/`cum0020400A01.jct`, `BRD_DSTC_VAL=IBANK`)와 AES 키가 그대로 동작함(화면 URL만 `.act`). 핸들러 10건 추출, 자기기관 판별 통과 확인.
+- **변경**: `KRBK0103` 핸들러 `HOST`를 `https://www.kyobosbi.com`으로 교체. `sites.yaml` `name: 교보SBI저축은행`, `aliases: [SBI저축은행, 저축은행중앙회]`(기존 공지 본문은 'SBI저축은행' 표기), `list_url` 갱신. `keywords.yaml` `institution_aliases`에 옛 표기 `SBI저축은행` 추가(LS증권·DB증권 사명 변경과 같은 패턴). 엑셀·대시보드 기관명도 교보SBI저축은행으로 표시(carryover는 기관코드 기준이라 영향 없음).
 
 ### 감지 목록 '수정' 팝업 (2026-11-02)
 
