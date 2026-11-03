@@ -1,8 +1,11 @@
 """
-KRBK0103 - SBI저축은행 (공지사항)
+KRBK0103 - 교보SBI저축은행 (舊 SBI저축은행, 공지사항)
+
+2026-11 사명 변경과 함께 도메인이 www.sbisb.co.kr → www.kyobosbi.com 으로 이전.
+목록 화면은 /cus0080100.act 로 바뀌었지만 데이터 API(.jct, 암호화 키)는 그대로다.
 
 흐름 (암호화 JSON API, AES-256-CBC, 원본 스크래퍼 그대로 포팅):
-  1. GET https://www.sbisb.co.kr/  → 쿠키
+  1. GET https://www.kyobosbi.com/  → 쿠키
   2. POST /cum0020300A01.jct  body: _JSON_={"PAGE_NO":1,"PAGE_LINE_CCNT":10,"BRD_DSTC_VAL":"IBANK"}
      응답: hex 문자열 → AES-256-CBC 복호화 → JSON (REC[])
   3. POST /cum0020400A01.jct  body: _JSON_={ROW_NO, BRD_SRNO, ...}  → 복호화 → BRD_CNTN(HTML)
@@ -25,7 +28,7 @@ from ..base import HandlerResult
 
 logger = logging.getLogger(__name__)
 
-HOST = "https://www.sbisb.co.kr"
+HOST = "https://www.kyobosbi.com"
 LIST_URL = HOST + "/cum0020300A01.jct"
 DETAIL_URL = HOST + "/cum0020400A01.jct"
 USER_AGENT = (

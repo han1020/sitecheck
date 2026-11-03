@@ -26,7 +26,7 @@ from . import KRBK0089  # noqa: F401 K뱅크
 # --- 저축은행 ---
 from . import KRBK0101  # noqa: F401 저축은행중앙회(통합)
 from . import KRBK0102  # noqa: F401 대신저축은행
-from . import KRBK0103  # noqa: F401 SBI저축은행
+from . import KRBK0103  # noqa: F401 교보SBI저축은행 (舊 SBI저축은행)
 from . import KRBK0104  # noqa: F401 애큐온저축은행
 from . import KRBK0105  # noqa: F401 웰컴저축은행
 from . import KRBK0106  # noqa: F401 KB저축은행

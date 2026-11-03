@@ -187,11 +187,13 @@ sites:
     list_url: https://bank.daishin.com/sub.do?code=03_news02
 
   - code: KRBK0103
-    name: SBI저축은행
+    name: 교보SBI저축은행
     category: 저축은행
     enabled: true
-    aliases: [저축은행중앙회]  # 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
-    list_url: https://www.sbisb.co.kr/cum0020300.jct
+    # 2026-11 사명 변경(SBI저축은행 → 교보SBI저축은행) + 도메인 이전(sbisb.co.kr → kyobosbi.com).
+    # 이전 공지 본문은 'SBI저축은행' 표기. 중앙회 통합시스템 사용 — 중앙회 작업은 자기 점검으로 본다
+    aliases: [SBI저축은행, 저축은행중앙회]
+    list_url: https://www.kyobosbi.com/cus0080100.act
 
   - code: KRBK0104
     name: 애큐온저축은행
