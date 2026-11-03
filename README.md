@@ -73,7 +73,7 @@ systemd 배포는 `/etc/sitecheck/api.env`를 웹/수집 서비스가 공통으�
 
 ## 웹 대시보드 (`serve.py`)
 
-브라우저에서 수집을 실행하고 결과를 확인·편집할 수 있는 내장 웹 서버입니다. **웹 프레임워크 없이** 파이썬 표준 라이브러리(`http.server`)로만 동작하므로 추가 의존성이 없습니다.
+브라우저에서 수집을 실행하고 결과를 확인·편집할 수 있는 내장 웹 서버입니다. **웹 프레임워크 없이** 파이썬 표준 라이브러리(`http.server`)로만 동작하므로 추가 의존성이 없습니다. 브라우저 탭 아이콘(돋보기+체크)은 HTML에 SVG data URI로 들어 있습니다.
 
 ```bash
 source .venv/bin/activate
@@ -424,6 +424,10 @@ logs/
 - (Docker) 컨테이너 안에서만 외부 접속 불가 → CentOS 7에서 firewalld와 Docker iptables 충돌 시 발생. `sudo docker run --rm sitecheck:latest python -c "import requests; print(requests.get('https://example.com', timeout=10).status_code)"` 로 확인
 
 ## 최근 변경 (2026-11)
+
+### 대시보드 브라우저 탭 아이콘 (2026-11-03)
+
+- **변경**: 대시보드에 파비콘 추가 — 파란 둥근 사각형(`#2563eb`) 안에 흰 돋보기+체크(공지를 찾아 점검 여부 확인). SVG를 `_INDEX_HTML`의 `<link rel="icon">`에 data URI로 직접 넣어 별도 이미지 파일·서버 경로가 없음. 그 전에는 탭에 제목만 있고 아이콘이 없었음.
 
 ### 제외 키워드 탭 '추가' 버튼 색 (2026-11-03)
 

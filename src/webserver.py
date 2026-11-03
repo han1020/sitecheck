@@ -1477,6 +1477,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>사이트 점검 수집기</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%232563eb'/><circle cx='28' cy='28' r='14' fill='none' stroke='%23fff' stroke-width='6'/><path d='M38.5 38.5L50 50' stroke='%23fff' stroke-width='7' stroke-linecap='round'/><path d='M21.5 28.5l5 5 8.5-9.5' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/></svg>"/>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
