@@ -964,6 +964,16 @@ _XL_NCOLS = 6            # 구분/기관코드/기관명/일시/업무/사유
 _excel_lock = threading.Lock()
 
 
+def list_sites_brief() -> List[Dict[str, str]]:
+    """엑셀뷰 '수기 입력' 팝업의 기관 선택 목록: sites.yaml 전체(비활성 포함) 코드·이름·분류."""
+    try:
+        sites = load_sites(CONFIG_DIR / "sites.yaml")
+    except Exception as exc:  # 설정 오류여도 팝업은 직접 입력으로 쓸 수 있게
+        logger.warning(f"기관 목록 로드 실패: {exc}")
+        return []
+    return [{"code": s.code, "name": s.name, "category": s.category} for s in sites]
+
+
 def _excel_path(filename: str) -> Optional[Path]:
     """검증된 엑셀 파일 경로 반환 (잘못된 이름/경로면 None)."""
     if not filename.startswith(_EXCEL_PREFIX) or not filename.endswith(".xlsx"):
@@ -1795,6 +1805,7 @@ _INDEX_HTML = """<!DOCTYPE html>
         <select id="excelSelect" onchange="loadExcel(this.value)"></select>
       </label>
       <button class="del-btn" id="excelDelBtn" title="선택한 엑셀 파일 삭제" onclick="deleteExcelFile()">🗑 파일 삭제</button>
+      <button class="add-btn" id="manualAddBtn" onclick="openManualAdd()" title="감지되지 않은 공지(팝업 공지 등)를 직접 입력해 맨 위에 추가">+ 수기 입력</button>
       <button id="saveBtn" onclick="saveExcel()" disabled>변경사항 저장</button>
       <button id="sortBtn" onclick="sortExcel()">일시·기관코드 정렬</button>
       <button id="syncBtn" onclick="syncExcel()" title="선택한 엑셀을 DB 저장 API와 동기화">DB 동기화</button>
@@ -1804,7 +1815,8 @@ _INDEX_HTML = """<!DOCTYPE html>
     <div class="legend">
       <span class="sw"></span> 노란색 = 신규 감지 항목 &nbsp;·&nbsp;
       셀을 클릭해 직접 편집한 뒤 <b>변경사항 저장</b>을 누르면 엑셀에 반영됩니다 &nbsp;·&nbsp;
-      행 끝 🗑 으로 삭제
+      행 끝 🗑 으로 삭제 &nbsp;·&nbsp;
+      감지 안 된 공지(팝업 공지 등)는 <b>+ 수기 입력</b>으로 직접 추가
     </div>
     <div class="meta-line" id="excelMeta"></div>
     <div id="dbPending"></div>
@@ -1848,6 +1860,13 @@ _INDEX_HTML = """<!DOCTYPE html>
    <div class="add-form">
     <h3 id="addTitle">엑셀에 공지 추가</h3>
     <div class="add-site" id="addSite"></div>
+    <div id="addManualWrap" style="display:none">
+      <label>기관<span class="hint">목록에서 고르거나 '코드 기관명' 형식으로 입력</span></label>
+      <input id="addInst" type="text" list="siteList" placeholder="예: 산업은행" autocomplete="off"/>
+      <datalist id="siteList"></datalist>
+      <label>구분</label>
+      <select id="addKind"><option value="일반점검">일반점검</option><option value="정기점검">정기점검</option></select>
+    </div>
     <label>일시<span class="hint" id="addSchedHint">예: 2026.09.20(일) 00:00 ~ 06:00</span></label>
     <input id="addSchedule" type="text" placeholder="점검 일시"/>
     <label>업무<span class="hint">영향받는 서비스</span></label>
@@ -2369,7 +2388,9 @@ function setModalRef(h){
 
 function setModalMode(mode){
   const edit = mode === 'edit';
-  document.getElementById('addTitle').textContent = edit ? '감지 공지 수정' : '엑셀에 공지 추가';
+  document.getElementById('addManualWrap').style.display = mode === 'manual' ? 'block' : 'none';
+  document.getElementById('addTitle').textContent = edit ? '감지 공지 수정'
+    : mode === 'manual' ? '공지 수기 입력' : '엑셀에 공지 추가';
   document.getElementById('addSchedHint').textContent = edit
     ? '바꾸면 다음 수집 때 원래 일시 행이 따로 다시 생길 수 있습니다' : _SCHED_HINT;
   const sb = document.getElementById('addSubmit');
@@ -2442,6 +2463,43 @@ function addToExcel(i, btn){
   document.getElementById('addSchedule').focus();
 }
 
+// ---- 엑셀뷰 → 수기 입력 (감지 안 된 팝업 공지 등) ----
+let siteBrief = null;   // [{code,name,category}] — sites.yaml
+async function loadSiteBrief(){
+  if(siteBrief) return siteBrief;
+  try { siteBrief = await (await fetch('/api/sites')).json(); } catch(e){ siteBrief = []; }
+  document.getElementById('siteList').innerHTML = siteBrief.map(s =>
+    `<option value="${esc(s.name)}">${esc(s.code)} · ${esc(s.category)}</option>`).join('');
+  return siteBrief;
+}
+
+// 입력값 → {code, name}. 기관명/코드 정확 일치 우선, 없으면 '코드 기관명' 형식 해석
+function resolveInst(text){
+  const t = text.trim();
+  if(!t) return null;
+  const list = siteBrief || [];
+  const hit = list.find(s => s.name === t || s.code.toUpperCase() === t.toUpperCase());
+  if(hit) return {code: hit.code, name: hit.name};
+  const m = t.match(/^([A-Za-z]{2,}[0-9]+)\\s+(.+)$/);
+  if(m) return {code: m[1].toUpperCase(), name: m[2].trim()};
+  return null;
+}
+
+async function openManualAdd(){
+  if(!curExcelFile){ alert('먼저 엑셀 파일을 선택하세요.'); return; }
+  await loadSiteBrief();
+  addTarget = {h: {}, btn: document.getElementById('manualAddBtn'), mode: 'manual'};
+  document.getElementById('addSite').textContent = `대상 파일: ${curExcelFile} · 맨 위에 노란색 행으로 추가됩니다`;
+  for(const id of ['addInst','addSchedule','addService','addReason']) document.getElementById(id).value = '';
+  document.getElementById('addKind').value = '일반점검';
+  setModalMode('manual');
+  setModalRef({});
+  document.getElementById('addDecisionWrap').style.display = 'none';
+  document.getElementById('addDecision').innerHTML = '';
+  document.getElementById('addOverlay').style.display = 'flex';
+  document.getElementById('addInst').focus();
+}
+
 function closeAddModal(){
   document.getElementById('addOverlay').style.display = 'none';
   addTarget = null;
@@ -2450,7 +2508,19 @@ function closeAddModal(){
 async function submitAddModal(){
   if(!addTarget) return;
   if(addTarget.mode === 'edit') return submitEditModal();
-  const {h, btn} = addTarget;
+  const manual = addTarget.mode === 'manual';
+  const {btn} = addTarget;
+  let h = addTarget.h;
+  if(manual){
+    const inst = resolveInst(document.getElementById('addInst').value);
+    if(!inst){
+      alert("기관을 목록에서 고르거나 '코드 기관명' 형식(예: KRBK0002 산업은행)으로 입력하세요.");
+      document.getElementById('addInst').focus(); return;
+    }
+    h = {site_code: inst.code, site_name: inst.name};
+  }
+  const targetFile = manual ? curExcelFile : curExcelName;
+  const btnLabel = manual ? '+ 수기 입력' : '공지추가';
   const schedule = document.getElementById('addSchedule').value.trim();
   const service  = document.getElementById('addService').value.trim();
   const reason   = document.getElementById('addReason').value.trim();
@@ -2465,27 +2535,28 @@ async function submitAddModal(){
   sb.disabled = true; sb.textContent = '추가 중…';
   btn.disabled = true; btn.textContent = '추가 중…';
   // 구분(일반점검) / 기관코드 / 기관명 / 일시 / 업무 / 사유
-  const cells = ['일반점검', h.site_code || '', h.site_name || '', schedule, service, reason];
+  const kind = manual ? document.getElementById('addKind').value : '일반점검';
+  const cells = [kind, h.site_code || '', h.site_name || '', schedule, service, reason];
   let res;
   try {
     const r = await fetch('/api/excel/append', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({file: curExcelName, cells,
+      body: JSON.stringify({file: targetFile, cells,
         action: choice === 'NEW_ALLOW' ? 'NEW_ALLOW' : choice.startsWith('LINK:') ? 'LINK' : null,
         linkedItemId: choice.startsWith('LINK:') ? choice.slice(5) : null}),
     });
     res = await r.json();
   } catch(e){ res = {ok:false, error:String(e)}; }
   if(res.ok){
-    btn.textContent = res.duplicate ? '이미 추가됨' : '추가됨 ✓';
-    btn.classList.add('added');
+    if(manual){ btn.disabled = false; btn.textContent = btnLabel; }
+    else { btn.textContent = res.duplicate ? '이미 추가됨' : '추가됨 ✓'; btn.classList.add('added'); }
     closeAddModal();
     // 엑셀뷰가 같은 파일을 보고 있으면 즉시 갱신
-    if(curExcelFile && curExcelFile === curExcelName) loadExcel(curExcelFile);
+    if(curExcelFile && curExcelFile === targetFile) loadExcel(curExcelFile);
     if(res.duplicate) alert('동일한 공지가 엑셀에 있어 기존 행을 사용했습니다.');
   } else {
     sb.disabled = false; sb.textContent = '엑셀에 추가';
-    btn.disabled = false; btn.textContent = '공지추가';
+    btn.disabled = false; btn.textContent = btnLabel;
     if(res.needs_decision){
       const sel = document.getElementById('addDecision');
       const options = ['<option value="">선택하세요</option>',
@@ -2929,6 +3000,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(regular_baseline()); return
         if path == "/api/excels":
             self._send_json(_list_excels()); return
+        if path == "/api/sites":
+            self._send_json(list_sites_brief()); return
         if path == "/api/excel":
             qs = parse_qs(parsed.query)
             fname = (qs.get("file") or [""])[0]
