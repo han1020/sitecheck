@@ -384,9 +384,10 @@ def delete_matched_hit(run_id: str, index: int) -> Dict[str, Any]:
 
 
 def edit_matched_hit(run_id: str, index: int, schedule: str, service: str,
-                     reason: str) -> Dict[str, Any]:
+                     reason: str, *, allow_schedule_create: bool = False) -> Dict[str, Any]:
     """감지 목록 '수정' 팝업: 일치하는 엑셀 '일반점검' 행의 일시·업무·사유를 고치고
-    run JSON 항목도 같은 값으로 갱신한다. DB는 건드리지 않는다 — 엑셀뷰 'DB 동기화'로 일괄 반영.
+    run JSON 항목도 같은 값으로 갱신한다. API 연동 시 엑셀뷰 '변경사항 저장'과 같은 경로
+    (update_row: DB PATCH, 일시 변경은 확인 뒤 새 공지, 저장 안 된 행은 파일에 쓰고 바로 동기화).
     """
     schedule, service, reason = (str(v or "").strip() for v in (schedule, service, reason))
     if not schedule:
@@ -412,12 +413,19 @@ def edit_matched_hit(run_id: str, index: int, schedule: str, service: str,
         item = matched[index]
 
     filename, path, matching_rows = _matched_excel_target(run_id, item)
-    updated = 0
-    if path is not None:
-        with _excel_lock:
-            wb = load_workbook(path)  # 스타일 보존 (H열 itemId도 그대로 → 동기화 때 같은 공지로 갱신)
-            ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
-            rows = matching_rows(ws)
+    not_found = {"ok": False, "excel_file": filename,
+                 "error": "엑셀에서 이 공지의 행을 찾지 못했습니다. (이미 지웠거나 엑셀뷰에서 일시를 "
+                          "손으로 고친 경우) 엑셀뷰에서 직접 수정하세요."}
+    if path is None:
+        return not_found
+    response: Dict[str, Any] = {"ok": True, "excel_file": filename}
+    with _excel_lock:
+        wb = load_workbook(path)  # 스타일 보존
+        ws = wb["점검"] if "점검" in wb.sheetnames else wb.worksheets[0]
+        rows = matching_rows(ws)
+        sync = configured_sync()
+        if sync is None:
+            # DB 미연동: 파일만 고친다 (H열 itemId도 그대로)
             for r in rows:
                 ws.cell(row=r, column=_XL_DATA_START_COL + 3).value = schedule
                 ws.cell(row=r, column=_XL_DATA_START_COL + 4).value = service
@@ -425,11 +433,28 @@ def edit_matched_hit(run_id: str, index: int, schedule: str, service: str,
             if rows:
                 wb.save(path)
             wb.close()
-            updated = len(rows)
-    if not updated:
-        return {"ok": False, "excel_file": filename,
-                "error": "엑셀에서 이 공지의 행을 찾지 못했습니다. (이미 지웠거나 엑셀뷰에서 일시를 "
-                         "손으로 고친 경우) 엑셀뷰에서 직접 수정하세요."}
+        else:
+            heads = {r: [str(ws.cell(row=r, column=_XL_DATA_START_COL + i).value or "")
+                         for i in range(3)] for r in rows}   # 구분·기관코드·기관명은 그대로
+            wb.close()
+            needs_sync = False
+            try:
+                for r in rows:
+                    result = api_update_row(path, r, heads[r] + [schedule, service, reason], *sync,
+                                            allow_schedule_create=allow_schedule_create)
+                    if not result["ok"]:
+                        return {**result, "excel_file": filename}
+                    needs_sync = needs_sync or bool(result.get("needs_sync"))
+                if needs_sync:
+                    # 저장되지 않았던 행(종료 시각 없음 등)을 고쳤다: 고친 값으로 바로 DB에 올린다
+                    response["sync"] = sync_workbook(path, *sync,
+                                                     collection_date=collection_date_of(path))
+                    _note_sync(path, response["sync"])
+            except (NoticeApiError, ValueError, OSError) as exc:
+                return {"ok": False, "excel_file": filename, "error": str(exc)}
+    if not rows:
+        return not_found
+    response["excel_updated"] = len(rows)
 
     from .datetime_parser import extract_window
     win = extract_window(schedule)
@@ -447,8 +472,8 @@ def edit_matched_hit(run_id: str, index: int, schedule: str, service: str,
             item["edited"] = True
             p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"감지 항목 수정: {run_id} [{index}] {item.get('site_code')} | 엑셀 {filename} "
-                f"{updated}행 | {schedule} / {service} / {reason[:30]}")
-    return {"ok": True, "excel_file": filename, "excel_updated": updated}
+                f"{len(rows)}행 | {schedule} / {service} / {reason[:30]}")
+    return response
 
 
 def skip_review_hit(run_id: str, index: int) -> Dict[str, Any]:
@@ -2016,7 +2041,7 @@ async function loadRun(runId){
         <td>${h.screenshot_url ? `<img class="thumb" src="${esc(h.screenshot_url)}" onclick="zoom('${esc(h.screenshot_url)}')"/>` : '<span class="muted">-</span>'}</td>
         <td class="delcell wide">${h.is_regular
           ? `<button class="edit-btn" disabled title="정기점검 행은 정기점검 탭에서 수정합니다">수정</button>`
-          : `<button class="edit-btn" title="일시·업무·사유를 고쳐 엑셀에 반영합니다 (DB는 엑셀뷰 'DB 동기화'로)" onclick="editMatched(${i}, this)">수정</button>`}<button class="del-btn" title="항목+스샷 삭제" onclick="deleteMatched(${i}, this)">🗑</button></td>
+          : `<button class="edit-btn" title="일시·업무·사유를 고쳐 엑셀과 DB에 반영합니다 (엑셀뷰 '변경사항 저장'과 같음)" onclick="editMatched(${i}, this)">수정</button>`}<button class="del-btn" title="항목+스샷 삭제" onclick="deleteMatched(${i}, this)">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -2433,11 +2458,27 @@ async function submitEditModal(){
     });
     res = await r.json();
   } catch(e){ res = {ok:false, error:String(e)}; }
+  if(res.schedule_change){   // 엑셀뷰와 같은 규칙: 일시가 바뀌면 새 공지로 등록
+    if(confirm('일시를 바꾸면 새 공지로 등록되고 기존 공지는 유지됩니다. 계속할까요?')){
+      try {
+        const retry = await fetch('/api/matched/edit', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({run_id: curRunId, index, schedule, service, reason, allow_schedule_create: true}),
+        });
+        res = await retry.json();
+      } catch(e){ res = {ok:false, error:String(e)}; }
+    } else {
+      sb.disabled = false; sb.textContent = '수정';
+      btn.disabled = false;
+      return;
+    }
+  }
   if(res.ok){
     closeAddModal();
     await loadRun(curRunId);
     // 엑셀뷰가 같은 파일을 보고 있으면 즉시 갱신
     if(curExcelFile && curExcelFile === res.excel_file) loadExcel(curExcelFile);
+    if(res.sync && res.sync.errors.length) alert('DB 저장 안 됨 — ' + res.sync.errors.map(e => e.excelRow + '행: ' + e.error).join('\\n'));
   } else {
     sb.disabled = false; sb.textContent = '수정';
     btn.disabled = false;
@@ -3049,7 +3090,8 @@ class Handler(BaseHTTPRequestHandler):
             idx = body.get("index")
             res = edit_matched_hit(body.get("run_id", ""), int(idx) if idx is not None else -1,
                                    body.get("schedule", ""), body.get("service", ""),
-                                   body.get("reason", ""))
+                                   body.get("reason", ""),
+                                   allow_schedule_create=bool(body.get("allow_schedule_create")))
             self._send_json(res, 200 if res.get("ok") else 400); return
         if parsed.path == "/api/run/delete":
             body = self._read_body()
