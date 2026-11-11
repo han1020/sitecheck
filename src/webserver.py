@@ -1411,15 +1411,13 @@ async def _collect() -> None:
 
     # 정기점검 baseline과 일시가 일치하는 감지 건 표시
     # (엑셀 신규에선 제외 — baseline 행이 이미 있음. 대시보드엔 체크로 구분)
-    from .regular_match import find_regular_by_text, find_regular_match, mark_regular_hits
+    from .regular_match import find_regular_match, mark_regular_hits
     mark_regular_hits(hits, regular)
     # carryover(이전 엑셀의 일반점검 행)도 baseline과 일치하면 제거
     from .datetime_parser import extract_window
     def _carry_is_regular(c) -> bool:
         w = extract_window(c.schedule) if c.schedule else None
-        if w:
-            return bool(find_regular_match(c.code, w.start, w.end, regular))
-        return bool(find_regular_by_text(c.code, c.schedule, regular))
+        return bool(w and find_regular_match(c.code, w.start, w.end, regular))
     carried = [c for c in carried if not _carry_is_regular(c)]
 
     # 감지 목록에서 삭제 처리한 공지는 엑셀·감지목록에 다시 올리지 않음 (스킵 탭에 기록)
