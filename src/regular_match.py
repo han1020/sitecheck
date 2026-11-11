@@ -107,13 +107,34 @@ def find_regular_match(site_code: str,
     return None
 
 
+def _compact(text: str) -> str:
+    """문구 비교용: 괄호 주석과 공백을 모두 뺀다."""
+    return "".join(re.sub(r"\([^)]*\)", "", text or "").split())
+
+
+def find_regular_by_text(site_code: str, schedule_text: str,
+                         regular: List[RegularEntry]) -> Optional[RegularEntry]:
+    """날짜 없이 반복 문구만 적힌 공지("매월 셋째 일요일 23:55(전일) ~ 04:00" 등)는 시각으로
+    대조할 수 없으므로, 같은 기관의 baseline 문구와 같으면(괄호·공백 무시) 그 정기점검으로 본다."""
+    wanted = _compact(schedule_text)
+    if not wanted:
+        return None
+    for r in regular:
+        if r.code == site_code and _compact(r.schedule) == wanted:
+            return r
+    return None
+
+
 def mark_regular_hits(hits, regular: List[RegularEntry]) -> int:
     """정기점검 baseline과 일치하는 hit에 is_regular/regular_reason을 표시."""
     n = 0
     for h in hits:
-        if not h.title or h.needs_review or not h.window:
+        if not h.title or h.needs_review:
             continue
-        r = find_regular_match(h.site_code, h.window.start, h.window.end, regular)
+        if h.window:
+            r = find_regular_match(h.site_code, h.window.start, h.window.end, regular)
+        else:
+            r = find_regular_by_text(h.site_code, h.schedule_text, regular)
         if r:
             h.is_regular = True
             h.regular_reason = r.reason or r.schedule
